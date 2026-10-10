@@ -1,41 +1,33 @@
-"""Step 1: download prices, index membership and company fundamentals.
+"""Step 1: download prices, index membership, company results and shareholding.
 
 Run:  python update_data.py
-      python update_data.py --fundamentals     (force a refresh of company results)
-Takes a few minutes. Run it once a day after the market closes.
-Company results change slowly, so they are refreshed once a week.
+      python update_data.py --fundamentals     (force a refresh of company results
+                                                and shareholding)
+Prices take a few minutes. Run it once a day after the market closes.
+Company results and shareholding change slowly, so they refresh once a week.
+The dashboard's "Update data now" button does the same thing.
 """
 
 import argparse
-import time
 
-import config
-from trading import data, fundamentals
+from trading import update
 
 parser = argparse.ArgumentParser(description="Download all data.")
 parser.add_argument("--fundamentals", action="store_true",
-                    help="refresh company results even if they are recent")
+                    help="refresh company results and shareholding even if they are recent")
 arguments = parser.parse_args()
 
-failed_market, failed_stocks = data.update_all()
+summary = update.run_update(include_company_data=True if arguments.fundamentals else None)
 
 print()
-if failed_market:
-    print(f"PROBLEM: no data for these markets: {', '.join(failed_market)}")
-print(f"Stocks without data on Yahoo: {len(failed_stocks)}")
+if summary["failed_markets"]:
+    print(f"PROBLEM: no data for these markets: {', '.join(summary['failed_markets'])}")
+print(f"Stocks without data on Yahoo: {summary['stocks_without_data']}")
 print("These are mostly companies that were delisted, merged or renamed.")
-
-file_age_days = (
-    (time.time() - config.ANNUAL_FILE.stat().st_mtime) / 86400
-    if config.ANNUAL_FILE.exists() else None
-)
-if arguments.fundamentals or file_age_days is None \
-        or file_age_days > config.FUNDAMENTALS_REFRESH_DAYS:
-    symbols = [symbol for symbol in data.all_symbols() if symbol not in failed_stocks]
-    print(f"\nDownloading company results for {len(symbols)} stocks ...")
-    count = fundamentals.update_fundamentals(symbols)
-    print(f"Company results saved for {count} stocks.")
+if summary["company_data_refreshed"]:
+    print("Company results and shareholding refreshed.")
 else:
-    print(f"\nCompany results are {file_age_days:.0f} days old; not refreshed.")
-
+    print(f"Company results are {update.company_data_age_days():.0f} days old; not refreshed.")
+if summary["shareholding_problem"]:
+    print(f"Could not finish the shareholding download: {summary['shareholding_problem']}")
 print("Downloads finished.")

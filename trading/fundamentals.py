@@ -19,6 +19,7 @@ ANNUAL_COLUMNS = [
 ]
 QUARTERLY_COLUMNS = ["symbol", "period_end", "revenue", "net_income"]
 RESULTS_COLUMNS = ["symbol", "date"]
+DIVIDEND_COLUMNS = ["symbol", "date", "amount"]
 
 
 # ------------------------------------------------------------- download -----
@@ -35,13 +36,13 @@ def _value(statement, row_names, column):
 def fetch_symbol(symbol):
     """Download one company's statements from Yahoo Finance.
 
-    Returns (annual rows, quarterly rows, results-date rows). Any part Yahoo
-    does not have comes back as an empty list.
+    Returns (annual rows, quarterly rows, results-date rows, dividend rows).
+    Any part Yahoo does not have comes back as an empty list.
     """
     import yfinance as yf  # imported here so the rest works without internet
 
     ticker = yf.Ticker(data.yahoo_ticker(symbol))
-    annual, quarterly, results = [], [], []
+    annual, quarterly, results, dividends = [], [], [], []
 
     try:
         income, balance = ticker.income_stmt, ticker.balance_sheet
@@ -93,7 +94,17 @@ def fetch_symbol(symbol):
     except Exception:
         pass
 
-    return annual, quarterly, results
+    try:
+        for moment, amount in ticker.dividends.items():
+            dividends.append({
+                "symbol": symbol,
+                "date": pd.Timestamp(moment).date(),
+                "amount": float(amount),
+            })
+    except Exception:
+        pass
+
+    return annual, quarterly, results, dividends
 
 
 def _merge_and_save(path, columns, new_rows, refreshed_symbols):
@@ -111,7 +122,7 @@ def _merge_and_save(path, columns, new_rows, refreshed_symbols):
 
 
 def update_fundamentals(symbols, workers=6):
-    """Download statements for many companies and save them as three CSV files.
+    """Download statements for many companies and save them as four CSV files.
 
     A company Yahoo returns nothing for keeps whatever was saved before.
     Returns the number of companies that came back with yearly results.
@@ -123,10 +134,12 @@ def update_fundamentals(symbols, workers=6):
     annual = [row for part in fetched for row in part[0]]
     quarterly = [row for part in fetched for row in part[1]]
     results = [row for part in fetched for row in part[2]]
+    dividends = [row for part in fetched for row in part[3]]
     refreshed = set(symbols)
     _merge_and_save(config.ANNUAL_FILE, ANNUAL_COLUMNS, annual, refreshed)
     _merge_and_save(config.QUARTERLY_FILE, QUARTERLY_COLUMNS, quarterly, refreshed)
     _merge_and_save(config.RESULTS_DATES_FILE, RESULTS_COLUMNS, results, refreshed)
+    _merge_and_save(config.DIVIDENDS_FILE, DIVIDEND_COLUMNS, dividends, refreshed)
     return len({row["symbol"] for row in annual})
 
 
@@ -136,6 +149,20 @@ def load_annual():
     if not config.ANNUAL_FILE.exists():
         return None
     return pd.read_csv(config.ANNUAL_FILE, parse_dates=["period_end"])
+
+
+def load_quarterly():
+    """Quarterly results for all companies, or None if not downloaded yet."""
+    if not config.QUARTERLY_FILE.exists():
+        return None
+    return pd.read_csv(config.QUARTERLY_FILE, parse_dates=["period_end"])
+
+
+def load_dividends():
+    """Dividends paid per share, or None if not downloaded yet."""
+    if not config.DIVIDENDS_FILE.exists():
+        return None
+    return pd.read_csv(config.DIVIDENDS_FILE, parse_dates=["date"])
 
 
 def load_results_dates():

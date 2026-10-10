@@ -158,8 +158,15 @@ def download_batch(tickers, start=config.HISTORY_START):
     return tables
 
 
-def _download_group(jobs, folder, label):
-    """Download a list of (name, ticker) pairs into a folder. Returns failures."""
+def _print_progress(step, done, total):
+    print(f"{step}: {done} of {total} done")
+
+
+def _download_group(jobs, folder, label, report=_print_progress):
+    """Download a list of (name, ticker) pairs into a folder. Returns failures.
+
+    report(step, done, total) is called after every batch to show progress.
+    """
     failed = []
     for first in range(0, len(jobs), BATCH_SIZE):
         batch = jobs[first:first + BATCH_SIZE]
@@ -174,13 +181,12 @@ def _download_group(jobs, folder, label):
                 failed.append(name)
             else:
                 table.to_csv(folder / f"{name}.csv")
-        done = min(first + BATCH_SIZE, len(jobs))
-        print(f"{label}: {done} of {len(jobs)} done, {len(failed)} without data")
+        report(label, min(first + BATCH_SIZE, len(jobs)), len(jobs))
         time.sleep(0.5)  # be polite to the free data source
     return failed
 
 
-def update_all():
+def update_all(report=_print_progress):
     """Refresh the membership list, then download every index and stock.
 
     Each run downloads the full history again. Yahoo re-adjusts old prices
@@ -192,14 +198,13 @@ def update_all():
     config.PRICES_DIR.mkdir(parents=True, exist_ok=True)
     config.MARKET_DIR.mkdir(parents=True, exist_ok=True)
 
-    if update_membership():
-        print("Index membership list refreshed.")
+    update_membership()
 
     market_jobs = list(config.MARKET_SYMBOLS.items())
-    failed_market = _download_group(market_jobs, config.MARKET_DIR, "Markets")
+    failed_market = _download_group(market_jobs, config.MARKET_DIR, "Markets", report)
 
     stock_jobs = [(symbol, yahoo_ticker(symbol)) for symbol in all_symbols()]
-    failed_stocks = _download_group(stock_jobs, config.PRICES_DIR, "Stocks")
+    failed_stocks = _download_group(stock_jobs, config.PRICES_DIR, "Stock prices", report)
     return failed_market, failed_stocks
 
 
@@ -220,12 +225,35 @@ def load_market(name):
 
 
 def load_all_stocks():
-    """Load every stock that has a saved file. Returns {symbol: table}."""
+    """Load every stock that has a saved file. Returns {symbol: table}.
+
+    Reading 800 CSV files takes several seconds, so the result is also kept in
+    one combined file. That file is used as long as no price file is newer
+    than it, and rebuilt automatically after every download.
+    """
+    files = {symbol: config.PRICES_DIR / f"{symbol}.csv" for symbol in all_symbols()}
+    files = {symbol: path for symbol, path in files.items() if path.exists()}
+    if not files:
+        return {}
+
+    newest = max(path.stat().st_mtime for path in files.values())
+    if config.PRICES_CACHE.exists() and config.PRICES_CACHE.stat().st_mtime >= newest:
+        try:
+            stocks = pd.read_pickle(config.PRICES_CACHE)
+            if set(stocks) <= set(files):
+                return stocks
+        except Exception:
+            pass  # unreadable or from an older library version: rebuild it below
+
     stocks = {}
-    for symbol in all_symbols():
+    for symbol in files:
         table = load_prices(symbol)
         if table is not None and len(table) > 0:
             stocks[symbol] = table
+    try:
+        pd.to_pickle(stocks, config.PRICES_CACHE)
+    except Exception:
+        pass  # the cache only saves time; nothing depends on it
     return stocks
 
 

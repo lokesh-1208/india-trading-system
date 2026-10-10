@@ -23,7 +23,7 @@ pip install -r requirements.txt
 | 1 | `python update_data.py` | Downloads the index membership history, prices for about 800 stocks, Nifty, India VIX, global markets and (weekly) company results and shareholding into `data/`. Takes a few minutes. |
 | 2 | `python run_backtest.py` | Tests the rules from 2015 to today and compares the result with Nifty buy-and-hold. |
 | 3 | `python daily_report.py` | Prints the market dashboard and the shortlist from the last close. |
-| Dashboard | `streamlit run dashboard.py` | Opens the dashboard in your browser: market, shortlist, company and backtest pages with charts. |
+| Dashboard | `streamlit run dashboard.py` | Opens the dashboard in your browser: market, shortlist, company and backtest pages with charts. Its "Update data now" button does the same job as `update_data.py`. |
 | Card | `python stock_card.py TCS` | Shows everything known about one company: price range, valuation, growth, profitability, debt, dividend, shareholding pattern and a ten-point scorecard. |
 | Tests | `python -m pytest` | Runs the automated checks on the calculations. |
 
@@ -80,6 +80,7 @@ trading/shareholding.py  who owns each company: promoters, FII, DII, mutual fund
 trading/charges.py   Zerodha delivery charges
 trading/backtest.py  day-by-day simulation and results
 trading/report.py    daily dashboard and shortlist
+trading/update.py    refreshes all data; shared by update_data.py and the dashboard button
 trading/charts.py    the charts used by the dashboard
 dashboard.py         the browser dashboard (Streamlit)
 tests/               automated checks

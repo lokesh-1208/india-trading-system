@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 import config
-from trading import backtest, charts, company, data, indicators, report
+from trading import backtest, charts, company, data, indicators, report, update
 from trading.screens import Screens
 
 st.set_page_config(page_title="India Trading System", layout="wide")
@@ -18,13 +18,14 @@ PERIODS = {"6 months": 126, "1 year": 252, "3 years": 756, "All": None}
 
 # ------------------------------------------------------------ loading -------
 # Streamlit re-runs this file on every click. The cache keeps the slow steps
-# (reading 800 files, working out the shortlist) from being repeated.
-@st.cache_data(show_spinner="Reading price files ...")
+# (reading 800 files, working out the shortlist) from being repeated. The
+# data is only read, never changed, so one shared copy is kept in memory.
+@st.cache_resource(show_spinner="Reading price files ...")
 def load_stocks():
     return data.load_all_stocks()
 
 
-@st.cache_data
+@st.cache_resource
 def load_nifty():
     return data.load_market(config.BENCHMARK)
 
@@ -36,7 +37,7 @@ def load_screens():
     return screens
 
 
-@st.cache_data(show_spinner="Working out today's shortlist ...")
+@st.cache_resource(show_spinner="Working out today's shortlist ...")
 def load_shortlist():
     account = report.account_status(report.load_journal())
     shortlist, removed = report.build_shortlist(
@@ -45,7 +46,7 @@ def load_shortlist():
     return shortlist, removed, account
 
 
-@st.cache_data(show_spinner="Running the backtest, about half a minute ...")
+@st.cache_resource(show_spinner="Running the backtest, about half a minute ...")
 def run_backtest_now():
     nifty, screens = load_nifty(), load_screens()
     stocks = {symbol: screens.add_indicators(symbol, prices, nifty["Close"])
@@ -360,10 +361,43 @@ st.sidebar.title("India Trading System")
 if "go_to_page" in st.session_state:          # set by the button on the shortlist page
     st.session_state["page"] = st.session_state.pop("go_to_page")
 page = st.sidebar.radio("Page", list(PAGES), key="page")
-st.sidebar.caption("To refresh the data, run `python update_data.py` in the terminal, "
-                   "then press R here.")
-if st.sidebar.button("Reload data from disk"):
-    st.cache_data.clear()
+st.sidebar.divider()
+st.sidebar.caption(f"Prices up to **{load_nifty().index[-1].date()}**")
+age = update.company_data_age_days()
+st.sidebar.caption("Company results: not downloaded yet" if age is None
+                   else f"Company results: {age:.0f} days old (refreshed weekly)")
+
+force = st.sidebar.checkbox("Also refresh company results and shareholding now",
+                            help="These refresh by themselves once a week. Ticking this "
+                                 "adds several minutes.")
+if st.sidebar.button("Update data now", type="primary"):
+    bar = st.sidebar.progress(0.0, text="Starting ...")
+
+    def show_progress(step, done, total):
+        bar.progress(min(1.0, done / total), text=f"{step}: {done} of {total}")
+
+    try:
+        summary = update.run_update(include_company_data=True if force else None,
+                                    report=show_progress)
+        note = "Data updated."
+        if summary["failed_markets"]:
+            note += " No data for: " + ", ".join(summary["failed_markets"]) + "."
+        if summary["shareholding_problem"]:
+            note += " Shareholding could not be refreshed."
+        st.session_state["update_note"] = note
+    except Exception as error:
+        st.session_state["update_note"] = f"The update stopped: {error}"
     st.cache_resource.clear()
     st.rerun()
+
+if st.sidebar.button("Reload data from disk",
+                     help="Use this after running update_data.py in the terminal."):
+    st.cache_resource.clear()
+    st.rerun()
+
+if "update_note" in st.session_state:
+    st.sidebar.info(st.session_state.pop("update_note"))
+st.sidebar.caption("Updating downloads the latest prices. Do it once a day after the "
+                   "market closes. It takes a few minutes.")
+
 PAGES[page]()

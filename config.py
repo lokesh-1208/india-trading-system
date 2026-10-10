@@ -15,6 +15,7 @@ DATA_DIR = ROOT / "data"
 MEMBERSHIP_FILE = DATA_DIR / "universe" / "nifty500_membership.csv"
 INDUSTRY_FILE = DATA_DIR / "universe" / "nifty500_list.csv"
 PRICES_DIR = DATA_DIR / "prices"      # one CSV per stock
+PRICES_CACHE = DATA_DIR / "prices_cache.pkl"   # all price files combined, for speed
 MARKET_DIR = DATA_DIR / "market"      # Nifty, India VIX, global indices
 REPORTS_DIR = ROOT / "reports"
 JOURNAL_FILE = ROOT / "journal" / "trades.csv"

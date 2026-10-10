@@ -83,6 +83,8 @@ def _number(value, digits=1):
     return None if value is None or pd.isna(value) else round(float(value), digits)
 
 
+RECENT_DAYS = 400
+
 TRADE_COLUMNS = [
     "action", "symbol", "industry", "close", "buy_above", "stop_loss", "target",
     "quantity", "capital_needed", "risk_rupees", "rsi", "volume_x", "vs_nifty_3m_%",
@@ -124,14 +126,19 @@ def build_shortlist(stocks, nifty, account, screens):
     Returns (shortlist table, counts of stocks removed by each check).
     """
     last_day = nifty.index[-1]
-    screens.learn_industry_pe(stocks)
+    if not screens.industry_pe:
+        screens.learn_industry_pe(stocks)
 
     rows = []
     removed = {"quality": 0, "results": 0}
     for symbol, prices in stocks.items():
         if prices.index[-1] != last_day or symbol in account["open_symbols"]:
             continue  # no fresh data for this stock, or you already hold it
-        table = screens.add_indicators(symbol, prices, nifty["Close"])
+        if symbol not in screens.industry:
+            continue  # not in the index today
+        # Today's signal needs only recent prices. Using the last 400 days
+        # gives the same answer as the full history and is much faster.
+        table = screens.add_indicators(symbol, prices.tail(RECENT_DAYS), nifty["Close"])
         today = table.iloc[-1]
         if not bool(today["price_signal"]):
             continue

@@ -86,6 +86,7 @@ FUNDAMENTALS_DIR = DATA_DIR / "fundamentals"
 ANNUAL_FILE = FUNDAMENTALS_DIR / "annual.csv"          # yearly results per company
 QUARTERLY_FILE = FUNDAMENTALS_DIR / "quarterly.csv"    # quarterly results
 RESULTS_DATES_FILE = FUNDAMENTALS_DIR / "results_dates.csv"
+DIVIDENDS_FILE = FUNDAMENTALS_DIR / "dividends.csv"
 FUNDAMENTALS_REFRESH_DAYS = 7    # company numbers change slowly; refresh weekly
 
 # A year's results become public some weeks after the year ends. In a backtest
@@ -103,3 +104,20 @@ FINANCIAL_INDUSTRY = "Financial Services"
 # No new trade this many calendar days before a company's results (or on the day).
 USE_RESULTS_BLOCK = True
 RESULTS_BLOCK_DAYS = 5
+
+# Company scorecard: ten yes/no checks shown on the company card and in the
+# daily report. The score is the number of checks passed. These thresholds are
+# common rules of thumb. They have not been proven by a backtest.
+SCORE_MIN_GROWTH = 0.10              # sales and profit growth of at least 10%
+SCORE_MIN_RETURN_ON_EQUITY = 0.15
+SCORE_MIN_NET_MARGIN = 0.10
+SCORE_MAX_DEBT_TO_EQUITY = 1.0       # not applied to banks and finance companies
+
+# ------------------------------------------------------ shareholding --------
+# Who owns each company: promoters, foreign funds (FII), Indian funds (DII,
+# which includes mutual funds) and the public. From the quarterly filings
+# companies make to NSE.
+SHAREHOLDING_FILE = FUNDAMENTALS_DIR / "shareholding.csv"
+FUND_HOLDERS_FILE = FUNDAMENTALS_DIR / "mutual_fund_holders.csv"
+SHAREHOLDING_QUARTERS = 2        # how many recent quarters to download per company
+NSE_SITE = "https://www.nseindia.com"

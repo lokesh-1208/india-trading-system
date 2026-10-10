@@ -8,7 +8,7 @@ to buy above, the stop-loss, the target and the exact quantity.
 import pandas as pd
 
 import config
-from trading import data, fundamentals, indicators, strategy
+from trading import company, data, indicators, strategy
 from trading.screens import Screens
 
 JOURNAL_COLUMNS = [
@@ -83,13 +83,48 @@ def _number(value, digits=1):
     return None if value is None or pd.isna(value) else round(float(value), digits)
 
 
+TRADE_COLUMNS = [
+    "action", "symbol", "industry", "close", "buy_above", "stop_loss", "target",
+    "quantity", "capital_needed", "risk_rupees", "rsi", "volume_x", "vs_nifty_3m_%",
+]
+BUSINESS_COLUMNS = [
+    "symbol", "score_of_10", "sales_1y_%", "profit_1y_%", "sales_3y_%", "profit_3y_%",
+    "qtr_profit_%", "roe_%", "margin_%", "debt_to_equity",
+]
+VALUE_COLUMNS = [
+    "symbol", "mcap_crore", "pe", "industry_pe", "price_to_book", "div_yield_%",
+    "from_52w_high_%", "next_results",
+]
+OWNER_COLUMNS = [
+    "symbol", "promoter_%", "fii_%", "fii_chg", "dii_%", "dii_chg", "mf_%", "mf_chg",
+    "public_%", "pledged", "top_fund",
+]
+
+
+def _owner_columns(owners):
+    """Shareholding figures for one shortlist row."""
+    if owners is None:
+        return {name: None for name in OWNER_COLUMNS[1:]}
+    pledged = {True: "yes", False: "no", None: None}[owners["promoters_pledged"]]
+    top_fund = owners["funds"][0][0][:38] if owners["funds"] else None
+    return {
+        "promoter_%": owners["promoter"],
+        "fii_%": owners["fii"], "fii_chg": owners["fii_change"],
+        "dii_%": owners["dii"], "dii_chg": owners["dii_change"],
+        "mf_%": owners["mutual_funds"], "mf_chg": owners["mutual_funds_change"],
+        "public_%": owners["public"],
+        "pledged": pledged,
+        "top_fund": top_fund,
+    }
+
+
 def build_shortlist(stocks, nifty, account, screens):
     """Every stock that gave a signal at the last close, strongest first.
 
     Returns (shortlist table, counts of stocks removed by each check).
     """
     last_day = nifty.index[-1]
-    results_dates = screens.results or {}
+    screens.learn_industry_pe(stocks)
 
     rows = []
     removed = {"quality": 0, "results": 0}
@@ -115,13 +150,11 @@ def build_shortlist(stocks, nifty, account, screens):
         if quantity < 1:
             continue  # one share already costs or risks more than the limits allow
 
-        company = fundamentals.latest_snapshot(
-            screens.company_rows(symbol), close=float(today["Close"]), as_of=last_day
-        ) or {}
-        upcoming = [day for day in results_dates.get(symbol, []) if day > last_day]
+        card = screens.card(symbol, prices)
+        next_results = screens.next_results(symbol, last_day)
         rows.append({
             "symbol": symbol,
-            "industry": screens.industry.get(symbol, ""),
+            "industry": card["industry"],
             "close": round(float(today["Close"]), 2),
             "buy_above": round(buy_above, 2),
             "stop_loss": round(stop, 2),
@@ -132,20 +165,27 @@ def build_shortlist(stocks, nifty, account, screens):
             "rsi": round(float(today["rsi"]), 1),
             "volume_x": round(float(today["volume_ratio"]), 2),
             "vs_nifty_3m_%": round(float(today["relative_strength"]) * 100, 1),
-            "sales_growth_%": _percent(company.get("sales_growth")),
-            "profit_growth_%": _percent(company.get("profit_growth")),
-            "roe_%": _percent(company.get("return_on_equity")),
-            "debt_to_equity": _number(company.get("debt_to_equity"), 2),
-            "pe": _number(company.get("pe")),
-            "next_results": min(upcoming).date() if upcoming else None,
+            "score_of_10": company.score(card, screens.is_financial(symbol)),
+            "sales_1y_%": _percent(card["sales_growth_1y"]),
+            "profit_1y_%": _percent(card["profit_growth_1y"]),
+            "sales_3y_%": _percent(card["sales_growth_3y"]),
+            "profit_3y_%": _percent(card["profit_growth_3y"]),
+            "qtr_profit_%": _percent(card["quarter_profit_growth"]),
+            "roe_%": _percent(card["return_on_equity"]),
+            "margin_%": _percent(card["net_margin"]),
+            "debt_to_equity": _number(card["debt_to_equity"], 2),
+            "mcap_crore": _number(card["market_cap_crore"], 0),
+            "pe": _number(card["pe"]),
+            "industry_pe": _number(card["industry_pe"]),
+            "price_to_book": _number(card["price_to_book"], 2),
+            "div_yield_%": _percent(card["dividend_yield"]),
+            "from_52w_high_%": _percent(card["below_52w_high"]),
+            "next_results": next_results.date() if next_results is not None else None,
+            **_owner_columns(card["owners"]),
         })
 
-    columns = [
-        "symbol", "industry", "close", "buy_above", "stop_loss", "target",
-        "quantity", "capital_needed", "risk_rupees", "rsi", "volume_x",
-        "vs_nifty_3m_%", "sales_growth_%", "profit_growth_%", "roe_%",
-        "debt_to_equity", "pe", "next_results",
-    ]
+    columns = (TRADE_COLUMNS[1:] + BUSINESS_COLUMNS[1:] + VALUE_COLUMNS[1:]
+               + OWNER_COLUMNS[1:])
     shortlist = pd.DataFrame(rows, columns=columns)
     shortlist = shortlist.sort_values("vs_nifty_3m_%", ascending=False)
     return shortlist.reset_index(drop=True), removed
@@ -215,11 +255,14 @@ def build_report(today=None):
     if len(shortlist) == 0:
         lines.append("Nothing passed the rules. No trade is also a decision.")
     else:
-        trade_columns = list(shortlist.columns[:13])
-        company_columns = ["symbol"] + list(shortlist.columns[13:])
-        lines += ["", "Trade plan", shortlist[trade_columns].to_string(index=False)]
-        lines += ["", "The business behind each stock (last full financial year)",
-                  shortlist[company_columns].to_string(index=False, na_rep="-")]
+        lines += ["", "Trade plan", shortlist[TRADE_COLUMNS].to_string(index=False)]
+        lines += ["", "The business (last full financial year; score = checks passed out of 10)",
+                  shortlist[BUSINESS_COLUMNS].to_string(index=False, na_rep="-")]
+        lines += ["", "Size and valuation",
+                  shortlist[VALUE_COLUMNS].to_string(index=False, na_rep="-")]
+        lines += ["", "Who owns it (latest quarter; chg = change from the quarter before)",
+                  shortlist[OWNER_COLUMNS].to_string(index=False, na_rep="-")]
+        lines += ["", "For the full card of any stock run:  python stock_card.py SYMBOL"]
         lines += [
             "",
             "How to use: for a TRADE row, place a buy only if price goes above",

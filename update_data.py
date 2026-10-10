@@ -1,16 +1,17 @@
 """Step 1: download prices, index membership and company fundamentals.
 
 Run:  python update_data.py
-      python update_data.py --fundamentals     (force a refresh of company results)
+      python update_data.py --fundamentals     (force a refresh of company results
+                                                and shareholding)
 Takes a few minutes. Run it once a day after the market closes.
-Company results change slowly, so they are refreshed once a week.
+Company results and shareholding change slowly, so they are refreshed once a week.
 """
 
 import argparse
 import time
 
 import config
-from trading import data, fundamentals
+from trading import data, fundamentals, shareholding
 
 parser = argparse.ArgumentParser(description="Download all data.")
 parser.add_argument("--fundamentals", action="store_true",
@@ -35,6 +36,14 @@ if arguments.fundamentals or file_age_days is None \
     print(f"\nDownloading company results for {len(symbols)} stocks ...")
     count = fundamentals.update_fundamentals(symbols)
     print(f"Company results saved for {count} stocks.")
+
+    current = list(data.load_universe()["Symbol"])
+    print(f"\nChecking NSE for new shareholding filings of {len(current)} stocks ...")
+    try:
+        updated, failed = shareholding.update_shareholding(current)
+        print(f"New shareholding data for {updated} stocks; {failed} could not be read.")
+    except Exception as error:
+        print(f"Could not reach NSE for shareholding data: {error}")
 else:
     print(f"\nCompany results are {file_age_days:.0f} days old; not refreshed.")
 

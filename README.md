@@ -20,9 +20,10 @@ pip install -r requirements.txt
 
 | Step | Command | What it does |
 |---|---|---|
-| 1 | `python update_data.py` | Downloads the index membership history, prices for about 800 stocks, Nifty, India VIX, global markets and (weekly) company results into `data/`. Takes a few minutes. |
+| 1 | `python update_data.py` | Downloads the index membership history, prices for about 800 stocks, Nifty, India VIX, global markets and (weekly) company results and shareholding into `data/`. Takes a few minutes. |
 | 2 | `python run_backtest.py` | Tests the rules from 2015 to today and compares the result with Nifty buy-and-hold. |
 | 3 | `python daily_report.py` | Prints the market dashboard and the shortlist from the last close. |
+| Card | `python stock_card.py TCS` | Shows everything known about one company: price range, valuation, growth, profitability, debt, dividend, shareholding pattern and a ten-point scorecard. |
 | Tests | `python -m pytest` | Runs the automated checks on the calculations. |
 
 The backtest also accepts a period, and each check can be switched off to see its effect:
@@ -73,6 +74,8 @@ trading/indicators.py  EMA, RSI, ATR
 trading/strategy.py  the signal rules and position sizing
 trading/fundamentals.py  company results, ratios, quality filter, results dates
 trading/screens.py   applies membership, quality and results checks the same way everywhere
+trading/company.py   the company card: valuation, growth, dividend yield, industry PE, scorecard
+trading/shareholding.py  who owns each company: promoters, FII, DII, mutual funds, public
 trading/charges.py   Zerodha delivery charges
 trading/backtest.py  day-by-day simulation and results
 trading/report.py    daily dashboard and shortlist
@@ -125,7 +128,14 @@ into `data/universe/`. It is not stored in this repository.
 No rule set tested so far has qualified for real money. The rules in this version
 lost money from 2015 to 2026 after charges. See the backtest log kept with the project.
 
+## Data sources
+
+- Prices, company results, dividends, results dates: Yahoo Finance.
+- Shareholding pattern: the quarterly filings companies make to NSE. The filing names
+  only holders above 1%, so the list of mutual fund schemes is not complete.
+- Index membership history: see "Stock universe" above.
+
 ## Not built yet
 
-Exchange announcements and news, FII/DII flows, promoter holding and pledging, the
-intraday module, the long-term module.
+Exchange announcements and news, daily FII/DII flows, the full list of mutual fund
+schemes holding each stock, the intraday module, the long-term module.

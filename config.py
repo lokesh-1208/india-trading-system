@@ -136,6 +136,37 @@ ROTATION_MARKET_SMA = 200        # all cash while Nifty is below this average
 ROTATION_START = "2022-02-01"    # the shareholding history begins in late 2021
 PAPER_START = "2026-10-12"       # paper portfolio: followed from this day, no real money
 
+# ------------------------------------------------ full model (rule set E) ---
+# Every factor the system collects goes into one score per stock, from 0 to 100.
+# Each factor is turned into a rank among that day's stocks, the ranks are
+# averaged inside each group, and the groups are combined with these weights.
+# The weights are a starting judgement. They were not tuned on past results.
+MODEL_WEIGHTS = {
+    "ownership": 0.25,     # FII, mutual fund, promoter, DII, insurer, public changes; pledge
+    "business": 0.20,      # growth, margins, return on equity, debt, quarterly results, scorecard
+    "valuation": 0.15,     # PE against its industry, price to book, earnings yield, dividend yield
+    "price": 0.25,         # 6-month strength, trend (EMA), RSI, volume, ATR, distance from high
+    "news": 0.075,         # company announcements in the last 30 days
+    "flows": 0.075,        # bulk and block deals in the stock in the last 30 days
+}
+MODEL_MARKET_MIN = 0.5         # buy only when at least half the market checks pass
+MODEL_VIX_MAX = 20             # India VIX above this counts as a fearful market
+MODEL_RUPEE_FALL_MAX = 0.02    # rupee weaker by more than 2% in a month fails its check
+MODEL_CRUDE_RISE_MAX = 0.15    # crude oil up more than 15% in a month fails its check
+MODEL_GOLD_RISE_MAX = 0.08     # gold up more than 8% in a month (money running to safety)
+MODEL_MONTH_DAYS = 21          # trading days in "a month" for the checks above
+MODEL_QUARTER_LAG_DAYS = 45    # a quarter's results are used from this long after it ends
+MODEL_NEWS_DAYS = 30
+
+# Two ways to trade the same score. "swing" is checked every week and holds
+# for days to a few weeks; "monthly" is checked once a month.
+MODEL_STYLES = {
+    "swing": {"check": "week", "positions": 5, "keep_rank": 10, "stop_loss": 0.08},
+    "monthly": {"check": "month", "positions": 10, "keep_rank": 20, "stop_loss": None},
+}
+MODEL_STYLE = "swing"
+MODEL_WEAKEST = 10             # how many of the lowest scores to list as sell / avoid
+
 # ------------------------------------------------- news and money flows -----
 ANNOUNCEMENTS_FILE = DATA_DIR / "news" / "announcements.csv"   # company announcements to NSE
 FII_DII_FILE = DATA_DIR / "flows" / "fii_dii.csv"              # daily buying and selling

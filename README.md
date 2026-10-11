@@ -84,9 +84,11 @@ trading/backtest.py  day-by-day simulation and results
 trading/rotation.py  rule set D: the ownership rotation (FII and mutual fund buying plus price strength)
 trading/journal.py   your real-money trades (kept in journal/real_trades.csv, not on GitHub)
 trading/report.py    daily dashboard and shortlist
+trading/model.py     the full model: every factor in one score per stock, market checks, buy and sell lists
 trading/nse.py       opens a session with the NSE website (used by the three below)
 trading/news.py      company announcements to NSE, sorted into plain categories
 trading/flows.py     daily FII/DII buying and selling, bulk and block deals
+trading/ui.py        the dashboard's dark look: colours, CSS, cards and score bars
 trading/update.py    refreshes all data; shared by update_data.py and the dashboard button
 trading/charts.py    the charts used by the dashboard
 dashboard.py         the browser dashboard (Streamlit)
@@ -155,3 +157,10 @@ into `data/universe/`. It is not stored in this repository.
 
 Exchange announcements and news, daily FII/DII flows, the full list of mutual fund
 schemes holding each stock, the intraday module, the long-term module.
+
+## Without typing commands (Windows)
+
+- `start_dashboard.bat`: double-click to open the dashboard. Right-click it and choose
+  "Send to > Desktop (create shortcut)" to get a desktop icon.
+- `schedule_daily_update.bat`: double-click once. Windows will then download the latest
+  data every weekday at 6:30 pm (the laptop must be on). The log is `reports/update_log.txt`.

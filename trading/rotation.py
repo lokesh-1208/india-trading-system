@@ -126,8 +126,31 @@ def scores_on(prepared, holdings, scoring_day):
     return table
 
 
-def simulate(prepared, holdings, start=None, end=None, capital=None):
-    """Follow the rule day by day. Returns equity, trades, open positions and scores."""
+def _new_period(calendar, day, check):
+    """Is this the first trading day of a new month (or week)?"""
+    today, before = calendar[day], calendar[day - 1]
+    if check == "week":
+        return today.isocalendar()[:2] != before.isocalendar()[:2]
+    return today.month != before.month
+
+
+def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None,
+             check="month", positions_wanted=None, keep_rank=None, stop_loss=None):
+    """Follow the rule day by day. Returns equity, trades, open positions and scores.
+
+    scorer: optional. A function that takes a day's position in the calendar and
+    returns that day's score table, best first. The full model (model.py) passes
+    its own; without it the three-factor ownership score is used. A score table
+    may have a True/False column `no_new_buy`; those stocks are not bought.
+
+    check: "month" or "week": how often holdings are reviewed.
+    positions_wanted, keep_rank: stocks held, and the rank a holding must stay
+    inside. They default to the rotation's settings in config.py.
+    stop_loss: for example 0.08. A holding that closes this far below its buy
+    price is sold at the next open, on any day. None means no stop-loss.
+    """
+    positions_wanted = config.ROTATION_POSITIONS if positions_wanted is None else positions_wanted
+    keep_rank = config.ROTATION_KEEP_RANK if keep_rank is None else keep_rank
     capital = float(config.CAPITAL if capital is None else capital)
     calendar = prepared["calendar"]
     start = pd.Timestamp(config.ROTATION_START if start is None else start)
@@ -154,6 +177,11 @@ def simulate(prepared, holdings, start=None, end=None, capital=None):
         If that quarter's filings have not been downloaded yet, the scores of
         the quarter before are used until they have.
         """
+        if scorer is not None:
+            if day_position not in score_cache:
+                score_cache[day_position] = scorer(day_position)
+            used_day[0] = calendar[day_position]
+            return score_cache[day_position]
         usable = [day for day in days if day <= calendar[day_position]]
         for scoring_day in reversed(usable[-2:]):
             if scoring_day not in score_cache:
@@ -190,28 +218,38 @@ def simulate(prepared, holdings, start=None, end=None, capital=None):
 
     for day in range(first + 1, last + 1):
         yesterday = day - 1
-        if calendar[day].month != calendar[yesterday].month:       # first trading day of a month
+        if stop_loss is not None:
+            for symbol in list(positions):
+                floor = positions[symbol]["entry"] * (1 - stop_loss)
+                if last_close[yesterday, column[symbol]] <= floor \
+                        and not np.isnan(opens[day, column[symbol]]):
+                    sell(symbol, day, "stop-loss")
+
+        if _new_period(calendar, day, check):
             scores = current_scores(yesterday)
             tradable = lambda symbol: not np.isnan(opens[day, column[symbol]])
 
             if not market_ok[yesterday]:
                 for symbol in [s for s in positions if tradable(s)]:
-                    sell(symbol, day, "Nifty below its average")
+                    sell(symbol, day, prepared.get("cash_reason", "Nifty below its average"))
             elif scores is not None and len(scores):
                 ranked = [s for s in scores.index if liquid[yesterday, column[s]]]
                 rank = {symbol: place for place, symbol in enumerate(ranked)}
                 for symbol in [s for s in positions if tradable(s)]:
-                    if rank.get(symbol, 10 ** 9) >= config.ROTATION_KEEP_RANK:
+                    if rank.get(symbol, 10 ** 9) >= keep_rank:
                         sell(symbol, day, "fell out of the top ranks")
 
                 account = equity[-1]
-                for symbol in ranked[:config.ROTATION_KEEP_RANK]:
-                    if len(positions) >= config.ROTATION_POSITIONS:
+                blocked = _blocked(scores)
+                for symbol in ranked[:keep_rank]:
+                    if symbol in blocked:
+                        continue
+                    if len(positions) >= positions_wanted:
                         break
                     if symbol in positions or not tradable(symbol):
                         continue
                     entry = opens[day, column[symbol]] * (1 + config.SLIPPAGE)
-                    budget = min(account / config.ROTATION_POSITIONS, cash / 1.002)
+                    budget = min(account / positions_wanted, cash / 1.002)
                     quantity = math.floor(budget / entry)
                     if quantity < 1:
                         continue
@@ -249,6 +287,13 @@ def simulate(prepared, holdings, start=None, end=None, capital=None):
     }
 
 
+def _blocked(scores):
+    """Stocks the score table says not to buy now (for example, results are due)."""
+    if scores is None or "no_new_buy" not in scores.columns:
+        return set()
+    return set(scores.index[scores["no_new_buy"].astype(bool)])
+
+
 # ----------------------------------------------------------- what to do now -
 def _latest_scores(prepared, holdings, day_position):
     """Scores from the newest scoring day on or before a day, with its date."""
@@ -261,7 +306,8 @@ def _latest_scores(prepared, holdings, day_position):
     return None, None
 
 
-def decision(prepared, holdings, held_symbols):
+def decision(prepared, holdings, held_symbols, scorer=None, check="month",
+             positions_wanted=None, keep_rank=None):
     """What the rule says to do, given the stocks you really hold.
 
     The rule acts once a month, at the open of the first trading day, using
@@ -274,19 +320,29 @@ def decision(prepared, holdings, held_symbols):
     Returns a dictionary with: market_ok, sell, keep, buy, candidates, room,
     ranking (table), scoring_day, decided_on, due_next_session, last_price.
     """
+    positions_wanted = config.ROTATION_POSITIONS if positions_wanted is None else positions_wanted
+    keep_rank = config.ROTATION_KEEP_RANK if keep_rank is None else keep_rank
     calendar = prepared["calendar"]
     last = len(calendar) - 1
     next_weekday = calendar[last] + pd.offsets.BDay(1)
-    due_next_session = next_weekday.month != calendar[last].month
+    if check == "week":
+        due_next_session = next_weekday.isocalendar()[:2] != calendar[last].isocalendar()[:2]
+    else:
+        due_next_session = next_weekday.month != calendar[last].month
 
     if due_next_session:
         decided = last
-    else:                                   # the last close of the previous month
-        this_month = (calendar.year == calendar[last].year) & (calendar.month == calendar[last].month)
-        decided = max(0, int(np.argmax(this_month)) - 1)
+    else:                                   # the last close of the previous month (or week)
+        decided = last
+        while decided > 0 and not _new_period(calendar, decided, check):
+            decided -= 1
+        decided = max(0, decided - 1)
 
     market_ok = bool(prepared["market_ok"].reindex(calendar).iloc[decided])
-    scores, scoring_day = _latest_scores(prepared, holdings, decided)
+    if scorer is None:
+        scores, scoring_day = _latest_scores(prepared, holdings, decided)
+    else:
+        scores, scoring_day = scorer(decided), calendar[decided]
     held = list(held_symbols)
 
     ranking = pd.DataFrame()
@@ -294,7 +350,7 @@ def decision(prepared, holdings, held_symbols):
     if scores is not None:
         liquid = prepared["liquid"].iloc[decided]
         ranked = [symbol for symbol in scores.index if bool(liquid.get(symbol, False))]
-        ranking = scores.loc[ranked].head(config.ROTATION_KEEP_RANK)
+        ranking = scores.loc[ranked].head(keep_rank)
 
     candidates, room = [], 0
     if not market_ok:
@@ -303,10 +359,12 @@ def decision(prepared, holdings, held_symbols):
         sell, keep, buy = [], held, []
     else:
         place = {symbol: number for number, symbol in enumerate(ranked)}
-        sell = [s for s in held if place.get(s, 10 ** 9) >= config.ROTATION_KEEP_RANK]
+        sell = [s for s in held if place.get(s, 10 ** 9) >= keep_rank]
         keep = [s for s in held if s not in sell]
-        room = max(0, config.ROTATION_POSITIONS - len(keep))
-        candidates = [s for s in ranked[:config.ROTATION_KEEP_RANK] if s not in keep]
+        room = max(0, positions_wanted - len(keep))
+        blocked = _blocked(scores)
+        candidates = [s for s in ranked[:keep_rank]
+                      if s not in keep and s not in blocked]
         buy = candidates[:room]
 
     return {
@@ -319,6 +377,7 @@ def decision(prepared, holdings, held_symbols):
         "scoring_day": scoring_day,
         "decided_on": calendar[decided],
         "due_next_session": due_next_session,
+        "check": check, "positions": positions_wanted, "keep_rank": keep_rank,
         "last_price": prepared["last_close"].iloc[last],
     }
 

@@ -1,10 +1,11 @@
-# Look of the dashboard. A fixed light theme, so the chart colours stay readable.
+# Look of the dashboard: a dark theme in the style of Zerodha Kite.
+# The rest of the styling is in trading/ui.py.
 [theme]
-base = "light"
-primaryColor = "#2a78d6"
-backgroundColor = "#fcfcfb"
-secondaryBackgroundColor = "#f0efec"
-textColor = "#0b0b0b"
+base = "dark"
+primaryColor = "#4184f3"
+backgroundColor = "#15171b"
+secondaryBackgroundColor = "#1e2126"
+textColor = "#d5d8dd"
 
 [browser]
 gatherUsageStats = false

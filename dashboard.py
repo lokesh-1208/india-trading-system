@@ -230,7 +230,7 @@ def shortlist_page():
     nifty = load_nifty()
     allowed, _ = market_is_open_for_trades(nifty)
 
-    st.title("Shortlist")
+    st.subheader("Shortlist")
     st.caption(f"Stocks that passed every rule at the close of {nifty.index[-1].date()}")
 
     one, two, three, four = st.columns(4)
@@ -433,7 +433,7 @@ def company_page():
 
 
 def backtest_page():
-    st.title("Backtest")
+    st.subheader("Backtest")
     st.caption("How the current rules would have done in the past, after Zerodha charges.")
 
     if st.button("Run the backtest again with today's data and settings"):
@@ -936,8 +936,21 @@ def model_page():
 
 
 # ---------------------------------------------------------------- start -----
-PAGES = {"Full model": model_page, "Ownership rotation": rotation_page, "Market": market_page,
-         "Company": company_page, "Shortlist": shortlist_page, "Backtest": backtest_page}
+def old_rules_page():
+    """The first rule set (chart breakout) and its test. Kept for reference only."""
+    st.title("Old rules")
+    st.warning("This is the first swing rule we built. It lost money after charges in its "
+               "test, so it is kept here for reference only. Act on the Full model page.",
+               icon="⚠️")
+    shortlist, test = st.tabs(["Today's shortlist", "Its backtest"])
+    with shortlist:
+        shortlist_page()
+    with test:
+        backtest_page()
+
+
+PAGES = {"Full model": model_page, "Ownership rotation": rotation_page,
+         "Market": market_page, "Company": company_page, "Old rules": old_rules_page}
 
 if load_nifty() is None or not load_stocks():
     st.title("India Trading System")

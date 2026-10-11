@@ -8,11 +8,12 @@ import pandas as pd
 import streamlit as st
 
 import config
-from trading import (backtest, charts, company, data, flows, indicators, journal, news,
-                     report, rotation, shareholding, update)
+from trading import (backtest, charts, company, data, flows, indicators, journal, model,
+                     news, report, rotation, shareholding, ui, update)
 from trading.screens import Screens
 
 st.set_page_config(page_title="India Trading System", layout="wide")
+ui.apply()
 
 PERIODS = {"6 months": 126, "1 year": 252, "3 years": 756, "All": None}
 
@@ -67,6 +68,17 @@ def load_rotation():
         load_stocks(), load_nifty(),
         lambda symbol, dates: data.membership_mask(symbol, dates, membership))
     return prepared, holdings
+
+
+@st.cache_resource(show_spinner="Scoring every stock on every factor ...")
+def load_model():
+    """The full model: every factor table, ready to score any day."""
+    return model.from_disk(load_stocks(), load_nifty())
+
+
+@st.cache_resource(show_spinner="Running the full model through the past ...")
+def model_history(style):
+    return load_model().simulate(start=config.ROTATION_START, style=style)
 
 
 @st.cache_resource(show_spinner=False)
@@ -275,6 +287,21 @@ def company_page():
     tiles[4].metric("Debt to equity", num(card["debt_to_equity"], 2))
     tiles[5].metric("Scorecard", f"{company.score(card, financial)} of 10")
 
+    # ---- the full model's view of this stock ----
+    today = load_model().score_on(len(nifty.index) - 1)
+    if symbol in today.index:
+        row = today.loc[symbol]
+        place = list(today.index).index(symbol) + 1
+        st.subheader("Full model score")
+        left, right = st.columns([1, 4])
+        with left:
+            ui.big_score(row["score"], f"of 100, rank {place} of {len(today)}")
+        with right:
+            ui.score_bars([(group.capitalize(), row[group]) for group in model.GROUPS])
+    else:
+        st.caption("The full model does not score this stock today (not a current "
+                   "Nifty 500 member, or it trades too little).")
+
     # ---- price ----
     st.subheader("Price")
     period = st.radio("Period", list(PERIODS), index=1, horizontal=True, key="company_period")
@@ -392,11 +419,8 @@ def company_page():
 
     # ---- scorecard ----
     st.subheader(f"Scorecard: {company.score(card, financial)} of 10")
-    marks = {True: "✅", False: "❌", None: "➖"}
-    left, right = st.columns(2)
-    for position, (name, ok) in enumerate(company.scorecard(card, financial)):
-        (left if position < 5 else right).markdown(f"{marks[ok]} {name}")
-    st.caption("➖ means the figure is not available. The thresholds are rules of "
+    ui.checks(company.scorecard(card, financial))
+    st.caption("– means the figure is not available. The thresholds are rules of "
                "thumb and have not been proven by a backtest.")
 
 
@@ -451,13 +475,22 @@ def backtest_page():
 
 
 def _what_to_do(plan, trades, money):
-    """The action box at the top of the rotation page."""
+    """The action panel at the top of a rule's page: one card per order."""
     prices = plan["last_price"]
-    budget = money / config.ROTATION_POSITIONS
+    places = plan.get("positions", config.ROTATION_POSITIONS)
+    keep_rank = plan.get("keep_rank", config.ROTATION_KEEP_RANK)
+    budget = money / places
+    weekly = plan.get("check") == "week"
+    period = "week" if weekly else "month"
     open_rows = journal.open_positions(trades)
     held_quantity = open_rows.groupby("symbol")["quantity"].sum()
     last_day = prices.name
-    next_check = (last_day + pd.offsets.MonthBegin(1)).strftime("%B %Y")
+    scores = plan["today"]["score"] if "today" in plan else {}
+    if weekly:
+        monday = last_day + pd.offsets.Week(weekday=0)
+        next_check = f"the week of {monday.strftime('%d %B %Y')}"
+    else:
+        next_check = (last_day + pd.offsets.MonthBegin(1)).strftime("%B %Y")
 
     # Fill the free places from the best-ranked stocks, passing over any whose
     # single share costs more than the money per stock (as the tests did).
@@ -469,43 +502,61 @@ def _what_to_do(plan, trades, money):
         quantity = int(budget // price) if price > 0 else 0
         (buys if quantity >= 1 else too_dear).append((symbol, price, quantity))
 
-    with st.container(border=True):
-        st.markdown("#### What to do")
-        actions = len(plan["sell"]) + len(buys)
-        if actions == 0:
-            if plan["keep"]:
-                st.markdown("### ✋ Hold. Nothing to change.")
-                st.write("Your holdings are the ones the rule wants: " + ", ".join(plan["keep"]) + ".")
-            elif not plan["market_ok"]:
-                st.markdown("### 💤 Stay in cash. Nothing to buy.")
-                st.write(f"Nifty is below its {config.ROTATION_MARKET_SMA}-day average. "
-                         "The rule buys nothing until Nifty is back above it.")
-            else:
-                st.markdown("### 💤 Nothing to do yet.")
-                st.write("No scores are available. Update the data.")
+    foot = []
+    if plan.get("stop_loss"):
+        foot.append(f"A holding that closes {plan['stop_loss']:.0%} below your buy price is "
+                    "sold the next day. Update the data daily to see it.")
+    foot.append(f"Checked once a {period}. Next check: first trading day of {next_check}. "
+                f"Prices are from {last_day.date()}.")
+
+    actions = len(plan["sell"]) + len(buys)
+    if actions == 0:
+        if plan["keep"]:
+            cards = [ui.action_card("Hold", symbol, f"{int(held_quantity.get(symbol, 0))} shares",
+                                    score=scores.get(symbol)) for symbol in plan["keep"]]
+            ui.plan_panel("Hold. Nothing to change.",
+                          ["Your holdings are the ones the rule wants."], cards, foot)
+        elif not plan["market_ok"]:
+            ui.plan_panel("Stay in cash. Nothing to buy.", [
+                plan.get("cash_text") or
+                f"Nifty is below its {config.ROTATION_MARKET_SMA}-day average. "
+                "The rule buys nothing until Nifty is back above it."], foot=foot)
         else:
-            when = ("at the next market open" if plan["due_next_session"]
-                    else f"outstanding from the check on {plan['decided_on'].date()}")
-            st.markdown(f"### 📋 {actions} action{'s' if actions != 1 else ''} {when}")
-            for symbol in plan["sell"]:
-                quantity = int(held_quantity.get(symbol, 0))
-                reason = ("Nifty is below its average" if not plan["market_ok"]
-                          else f"it fell out of the top {config.ROTATION_KEEP_RANK}")
-                st.markdown(f"🔴 **Sell {symbol}**: all {quantity} shares, because {reason}.")
-            for symbol, price, quantity in buys:
-                st.markdown(f"🟢 **Buy {symbol}**: {quantity} shares at about Rs {price:,.2f} "
-                            f"(about Rs {quantity * price:,.0f}).")
-            for symbol in plan["keep"]:
-                st.markdown(f"✋ **Hold {symbol}**.")
-            if too_dear:
-                names = ", ".join(f"{symbol} (Rs {price:,.0f} a share)" for symbol, price, _ in too_dear)
-                st.caption(f"Passed over because one share costs more than the Rs {budget:,.0f} "
-                           f"set aside per stock: {names}.")
-            if not plan["due_next_session"] and not len(open_rows):
-                st.caption("The rule has held these since the start of the month. In the tests "
-                           "it only bought on the first trading day of a month.")
-        st.caption(f"The rule is checked once a month. Next check: first trading day of "
-                   f"{next_check}. Prices are from {last_day.date()}.")
+            ui.plan_panel("Nothing to do yet.", ["No scores are available. Update the data."],
+                          foot=foot)
+        return
+
+    cards = []
+    for symbol in plan["sell"]:
+        quantity = int(held_quantity.get(symbol, 0))
+        if symbol in plan.get("stopped", []):
+            reason = f"{plan['stop_loss']:.0%} or more below your buy price (stop-loss)"
+        elif not plan["market_ok"]:
+            reason = plan.get("sell_reason", "Nifty is below its average")
+        else:
+            reason = f"fell out of the top {keep_rank}"
+        cards.append(ui.action_card("Sell", symbol, f"all {quantity} shares", reason,
+                                    scores.get(symbol)))
+    for symbol, price, quantity in buys:
+        cards.append(ui.action_card(
+            "Buy", symbol, f"{quantity} shares at about Rs {price:,.2f}",
+            f"about Rs {quantity * price:,.0f}", scores.get(symbol)))
+    for symbol in plan["keep"]:
+        cards.append(ui.action_card("Hold", symbol,
+                                    f"{int(held_quantity.get(symbol, 0))} shares",
+                                    score=scores.get(symbol)))
+
+    when = ("at the next market open" if plan["due_next_session"]
+            else f"outstanding from the check on {plan['decided_on'].date()}")
+    notes = []
+    if too_dear:
+        names = ", ".join(f"{symbol} (Rs {price:,.0f} a share)" for symbol, price, _ in too_dear)
+        notes.append(f"Passed over because one share costs more than the Rs {budget:,.0f} "
+                     f"set aside per stock: {names}.")
+    if not plan["due_next_session"] and not len(open_rows):
+        foot.insert(0, f"The rule has held these since the start of the {period}. In the tests "
+                       f"it only bought on the first trading day of a {period}.")
+    ui.plan_panel(f"{actions} order{'s' if actions != 1 else ''} {when}", notes, cards, foot)
 
 
 def _my_trades(trades, prices, symbols):
@@ -665,8 +716,143 @@ def rotation_page():
         st.dataframe(result["trades"], hide_index=True, use_container_width=True)
 
 
+GROUP_NOTES = {
+    "ownership": "FII, mutual fund, promoter, DII, insurer and public holding changes; "
+                 "pledged shares; number of fund schemes above 1%",
+    "business": "sales and profit growth (1 and 3 years), margin, return on equity, debt, "
+                "latest quarter against a year ago, the ten-point scorecard",
+    "valuation": "PE against its industry, price to book, earnings per share against "
+                 "price, dividend yield",
+    "price": "6-month strength, EMA trend, RSI, volume, ATR, distance from the 52-week high",
+    "news": "company announcements in the last 30 days (orders, rating changes, legal "
+            "matters, resignations)",
+    "flows": "bulk and block deals in the stock in the last 30 days",
+}
+
+
+SCORE_COLUMNS = {
+    name: st.column_config.ProgressColumn(name, min_value=0, max_value=100, format="%d")
+    for name in ["score", *model.GROUPS]
+}
+
+
+def _score_table(table):
+    """Scores as a table: total, then each group, then a few plain figures."""
+    return pd.DataFrame({
+        "rank": table["rank"],
+        "symbol": table.index,
+        "score": table["score"].round(0),
+        **{group: table[group].round(0) for group in model.GROUPS},
+        "price": table["close"].round(2),
+        "PE": table["pe"].round(1),
+        "6-month change %": (table["momentum"] * 100).round(1),
+        "FII change": table["fii_change"].round(2),
+        "MF change": table["mf_change"].round(2),
+        "results due": table["no_new_buy"].map({True: "yes", False: ""}),
+    })
+
+
+def model_page():
+    st.title("Full model")
+    st.caption("Every factor the system collects, in one score from 0 to 100 per stock. "
+               "New money goes in only when at least half the market checks pass.")
+
+    labels = {"swing": "Swing: checked every week", "monthly": "Monthly: checked once a month"}
+    names = list(config.MODEL_STYLES)
+    style = st.radio("How to trade the score", names, index=names.index(config.MODEL_STYLE),
+                     format_func=lambda name: labels.get(name, name), horizontal=True,
+                     key="model_style")
+    rules = config.MODEL_STYLES[style]
+    stop = (f"sold if it closes {rules['stop_loss']:.0%} below the buy price"
+            if rules["stop_loss"] else "no stop-loss")
+    st.caption(f"{rules['positions']} stocks in equal amounts, a holding is kept while it "
+               f"stays in the top {rules['keep_rank']}, {stop}.")
+
+    built = load_model()
+    nifty = load_nifty()
+    trades = journal.load()
+    open_rows = journal.open_positions(trades)
+    held = list(open_rows["symbol"].unique())
+    paid = dict(open_rows.groupby("symbol")["buy_price"].mean()) if len(open_rows) else {}
+    plan = built.decision(held, style=style, buy_prices=paid)
+    today = plan["today"].assign(rank=range(1, len(plan["today"]) + 1))
+
+    money = st.number_input("Money you have set aside for this model (Rs)", min_value=10_000,
+                            value=int(config.CAPITAL), step=5_000, key="model_money",
+                            help=f"It is split equally across {rules['positions']} stocks.")
+    _what_to_do(plan, trades, money)
+
+    # ---- the market ----
+    st.subheader(f"Market checks: {plan['market_score']:.0%} pass")
+    ui.checks([(name, {1.0: True, 0.0: False}.get(passed))
+               for name, passed in plan["checks"].items()])
+    st.caption("– means not enough history is saved yet. The model buys when at least "
+               f"{config.MODEL_MARKET_MIN:.0%} of the known checks pass, and holds cash otherwise.")
+
+    # ---- buy side and sell side ----
+    st.subheader("Strongest 20: buy candidates")
+    st.caption("Scores from the latest prices. A stock marked 'results due' is not bought "
+               "until its results are out.")
+    st.dataframe(_score_table(today.head(20)), hide_index=True,
+                 use_container_width=True, column_config=SCORE_COLUMNS)
+
+    st.subheader(f"Weakest {config.MODEL_WEAKEST}: sell or avoid")
+    st.caption("If you hold one of these, the model says exit. Selling a share you do not "
+               "hold is only possible within the same day (intraday), or for longer through "
+               "futures or put options.")
+    st.dataframe(_score_table(today.tail(config.MODEL_WEAKEST).iloc[::-1]), hide_index=True,
+                 use_container_width=True, column_config=SCORE_COLUMNS)
+
+    _my_trades(trades, plan["last_price"], sorted(load_stocks()))
+
+    # ---- details ----
+    st.subheader("Details")
+    with st.expander("What goes into the score"):
+        st.dataframe(pd.DataFrame({
+            "Part": [group.capitalize() for group in model.GROUPS],
+            "Weight": [f"{config.MODEL_WEIGHTS[group]:.1%}" for group in model.GROUPS],
+            "Factors": [GROUP_NOTES[group] for group in model.GROUPS],
+        }), hide_index=True, use_container_width=True)
+        st.caption("Each factor is ranked among the day's stocks. A figure that is not known "
+                   "counts as average. The weights are a starting judgement, set in config.py.")
+
+    with st.expander(f"Every stock's score today ({len(today)})"):
+        st.dataframe(_score_table(today), hide_index=True,
+                 use_container_width=True, column_config=SCORE_COLUMNS)
+
+    with st.expander("How the model did in the past"):
+        result = model_history(style)
+        summary, by_year = rotation.summarise(result, nifty)
+        if len(result["trades"]):
+            days_held = (pd.to_datetime(result["trades"]["exit_date"])
+                         - pd.to_datetime(result["trades"]["entry_date"])).dt.days
+            st.caption(f"Style: {labels.get(style, style)}. A typical trade was held for "
+                       f"{days_held.median():.0f} days.")
+        st.caption(f"{summary['period_start']} to {summary['period_end']}, after charges, "
+                   f"starting with Rs {result['capital']:,.0f}.")
+        one, two, three, four = st.columns(4)
+        one.metric("Growth per year", pct(summary["annual_growth_rate"]),
+                   f"Nifty {pct(summary['benchmark_annual_growth_rate'])}", delta_color="off")
+        two.metric("Worst drawdown", pct(summary["max_drawdown"]),
+                   f"Nifty {pct(summary['benchmark_max_drawdown'])}", delta_color="off")
+        three.metric("Trades", summary["trades"],
+                     f"{pct(summary['win_rate'], signed=False)} won", delta_color="off")
+        four.metric("Charges paid", f"Rs {summary['total_charges']:,.0f}")
+        st.warning(
+            "This test is weaker than it looks. Yearly company results go back about four "
+            "years, quarterly results about one year, and news and deals only a few days, "
+            "so for most of this period those parts counted as average. The history is "
+            "under five years and companies delisted since 2022 are missing.", icon="⚠️")
+        show(charts.growth_chart(result["equity"],
+                                 nifty["Close"].reindex(result["equity"].index).dropna(),
+                                 result["capital"]))
+        show(charts.drawdown_chart(result["equity"]))
+        show(charts.yearly_bars(by_year))
+        st.dataframe(result["trades"], hide_index=True, use_container_width=True)
+
+
 # ---------------------------------------------------------------- start -----
-PAGES = {"Ownership rotation": rotation_page, "Market": market_page,
+PAGES = {"Full model": model_page, "Ownership rotation": rotation_page, "Market": market_page,
          "Company": company_page, "Shortlist": shortlist_page, "Backtest": backtest_page}
 
 if load_nifty() is None or not load_stocks():
@@ -674,12 +860,18 @@ if load_nifty() is None or not load_stocks():
     st.error("No data found. In the terminal run:  python update_data.py")
     st.stop()
 
-st.sidebar.title("India Trading System")
 if "go_to_page" in st.session_state:          # set by the button on the shortlist page
     st.session_state["page"] = st.session_state.pop("go_to_page")
-page = st.sidebar.radio("Page", list(PAGES), key="page")
-st.sidebar.divider()
-st.sidebar.caption(f"Prices up to **{load_nifty().index[-1].date()}**")
+brand, menu, stamp = st.columns([2, 7, 2])
+with brand:
+    ui.top_bar_brand()
+with menu:
+    page = st.radio("Page", list(PAGES), key="page", horizontal=True,
+                    label_visibility="collapsed")
+with stamp:
+    ui.as_of(f"Prices up to {load_nifty().index[-1]:%d %b %Y}")
+
+st.sidebar.subheader("Data")
 age = update.company_data_age_days()
 st.sidebar.caption("Company results: not downloaded yet" if age is None
                    else f"Company results: {age:.0f} days old (refreshed weekly)")

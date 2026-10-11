@@ -3,7 +3,7 @@
 Colour rules used everywhere:
   - the same thing always has the same colour (price is always blue)
   - one scale per chart: two different measures get two charts, never two axes
-  - text is always dark; only the lines and bars carry colour
+  - text is always light grey on the dark background; only lines and bars carry colour
 """
 
 import pandas as pd
@@ -12,10 +12,11 @@ import plotly.graph_objects as go
 import config
 
 # Colours, in the fixed order they are handed out to series.
-BLUE, ORANGE, AQUA, YELLOW = "#2a78d6", "#eb6834", "#1baf7a", "#eda100"
-RED = "#e34948"            # only as the opposite of blue: falls against rises
-SURFACE = "#fcfcfb"
-TEXT, MUTED, GRID = "#0b0b0b", "#52514e", "#e8e7e3"
+BLUE, ORANGE, AQUA, YELLOW = "#4184f3", "#f0884a", "#2bb89a", "#e3b23c"
+RED = "#e5534b"            # only as the opposite of blue: falls against rises
+SURFACE = "#15171b"          # the dashboard's dark background
+TEXT, MUTED, GRID = "#e8eaed", "#8b9099", "#262a31"
+ON_COLOUR = "#101216"        # text printed on top of a coloured bar
 
 
 def _style(figure, title, height=360, y_title=None, legend=True):
@@ -140,7 +141,7 @@ def ownership_bars(rows):
             marker={"color": colour, "line": {"color": SURFACE, "width": 2}},
             text=[f"{value:.1f}%" if value >= 6 else "" for value in rows[column]],
             textposition="inside", insidetextanchor="middle",
-            textfont={"color": TEXT},
+            textfont={"color": ON_COLOUR},
             hovertemplate="%{x:.2f}%<extra>" + name + "</extra>")
     figure.update_layout(barmode="stack")
     figure.update_xaxes(range=[0, 100], ticksuffix="%")
@@ -187,7 +188,7 @@ def drawdown_chart(equity):
     fall = (equity / equity.cummax() - 1) * 100
     figure = go.Figure(go.Scatter(
         x=fall.index, y=fall, mode="lines", line={"color": BLUE, "width": 2},
-        fill="tozeroy", fillcolor="rgba(42,120,214,0.10)",
+        fill="tozeroy", fillcolor="rgba(65,132,243,0.16)",
         hovertemplate="%{y:.1f}%<extra>Below the peak</extra>"))
     limit = -config.TOTAL_DRAWDOWN_LIMIT * 100
     figure.add_hline(y=limit, line={"color": MUTED, "width": 1},

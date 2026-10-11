@@ -1,0 +1,28 @@
+# Runs the automated checks on GitHub for every pull request and every change
+# to main. A pull request shows a green tick when all checks pass and a red
+# cross when one fails, so a broken change is caught before it is merged.
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the libraries
+        run: pip install -r requirements.txt
+
+      - name: Run the checks
+        run: python -m pytest -v

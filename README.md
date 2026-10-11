@@ -1,5 +1,7 @@
 # india-trading-system
 
+[![Tests](https://github.com/lokesh-1208/india-trading-system/actions/workflows/tests.yml/badge.svg)](https://github.com/lokesh-1208/india-trading-system/actions/workflows/tests.yml)
+
 A rule-based swing trading system for Indian stocks (Nifty 500), written in Python.
 It downloads free end-of-day data, applies a fixed set of rules, tests those rules
 on past years, and prints a daily shortlist with entry, stop-loss, target and quantity.
@@ -25,7 +27,7 @@ pip install -r requirements.txt
 | 3 | `python daily_report.py` | Prints the market dashboard and the shortlist from the last close. |
 | Dashboard | `streamlit run dashboard.py` | Opens the dashboard in your browser: market, shortlist, company and backtest pages with charts. Its "Update data now" button does the same job as `update_data.py`. |
 | Card | `python stock_card.py TCS` | Shows everything known about one company: price range, valuation, growth, profitability, debt, dividend, shareholding pattern and a ten-point scorecard. |
-| Tests | `python -m pytest` | Runs the automated checks on the calculations. |
+| Tests | `python -m pytest` | Runs the automated checks on the calculations. GitHub also runs them on every pull request. |
 
 The backtest also accepts a period, and each check can be switched off to see its effect:
 

@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 
 import config
+from trading import nse
 
 SHAREHOLDING_COLUMNS = [
     "symbol", "quarter_end", "filed_on", "promoter", "fii", "dii", "mutual_funds",
@@ -37,11 +38,6 @@ GROUPS = {
     "insurance": ["insurancecompanies"],
     "total": ["shareholdingpattern"],
 }
-BROWSER = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-)
-
 
 # ------------------------------------------------------------- parsing ------
 def _facts(xml_text, tag):
@@ -152,21 +148,6 @@ def _funds(xml_text, scale):
 
 
 # ------------------------------------------------------------- download -----
-def _session():
-    """A web session that NSE accepts: browser-like, with NSE's cookies."""
-    try:
-        from curl_cffi import requests as web    # installed along with yfinance
-        session = web.Session(impersonate="chrome")
-    except Exception:
-        import requests as web
-        session = web.Session()
-    session.headers.update({"User-Agent": BROWSER, "Accept-Language": "en-US,en;q=0.9"})
-    # NSE only answers its data requests after a normal page has been opened.
-    session.get(config.NSE_SITE + "/companies-listing/corporate-filings-shareholding-pattern",
-                timeout=30)
-    return session
-
-
 def is_quarter_end(day):
     """True for the last days of March, June, September and December.
 
@@ -182,14 +163,8 @@ def fetch_symbol(session, symbol, already_have=frozenset()):
     already_have: quarter ends (as text) we have stored, which are skipped.
     Returns (shareholding rows, fund rows).
     """
-    reply = session.get(
-        config.NSE_SITE + "/api/corporate-share-holdings-master",
-        params={"index": "equities", "symbol": symbol},
-        headers={"Accept": "application/json",
-                 "Referer": config.NSE_SITE + "/companies-listing/corporate-filings-shareholding-pattern"},
-        timeout=30,
-    )
-    filings = reply.json()
+    filings = nse.get_json(session, "/api/corporate-share-holdings-master",
+                           index="equities", symbol=symbol)
     if not isinstance(filings, list):
         return [], []
 
@@ -243,7 +218,7 @@ def update_shareholding(symbols, workers=3):
         complete = stored[stored["filed_on"].notna()]   # rows without a filing date are redone
         have = {symbol: frozenset(rows["quarter_end"].dt.date.astype(str))
                 for symbol, rows in complete.groupby("symbol")}
-    session = _session()
+    session = nse.session()
 
     def work(symbol):
         for attempt in range(2):

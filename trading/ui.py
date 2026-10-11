@@ -10,12 +10,34 @@ from html import escape
 
 import streamlit as st
 
-BACKGROUND, PANEL, BORDER = "#15171b", "#1e2126", "#2b2f37"
-TEXT, BRIGHT, MUTED = "#d5d8dd", "#f1f3f5", "#8b9099"
+# The same in both modes: buy, sell, good, bad.
 BLUE, SELL = "#4184f3", "#ff5722"
-GOOD, BAD, NEUTRAL = "#4caf50", "#e5534b", "#6b7380"
+GOOD, BAD, NEUTRAL = "#4caf50", "#e5534b", "#7b8390"
 
-CSS = f"""
+# Background and text colours for each mode. The matching Streamlit colours
+# are in .streamlit/config.toml. Switch mode from the menu at the top right:
+# Settings > Choose app theme.
+PALETTES = {
+    "dark": {"BACKGROUND": "#15171b", "PANEL": "#1e2126", "BORDER": "#2b2f37",
+             "TEXT": "#d5d8dd", "BRIGHT": "#f1f3f5", "MUTED": "#8b9099",
+             "SIDEBAR": "#111317", "LINE": "#23262c"},
+    "light": {"BACKGROUND": "#ffffff", "PANEL": "#f6f7f9", "BORDER": "#e1e4e9",
+              "TEXT": "#3b4048", "BRIGHT": "#16191d", "MUTED": "#6b7280",
+              "SIDEBAR": "#f6f7f9", "LINE": "#eceef2"},
+}
+MUTED = PALETTES["dark"]["MUTED"]      # set again by apply()
+
+
+def current_mode():
+    """ "light" or "dark": the theme the person has chosen in the browser."""
+    try:
+        return "light" if st.context.theme.type == "light" else "dark"
+    except Exception:
+        return "dark"
+
+
+def _css(BACKGROUND, PANEL, BORDER, TEXT, BRIGHT, MUTED, SIDEBAR, LINE):
+    return f"""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap');
 
@@ -39,7 +61,7 @@ header[data-testid="stHeader"] {{ background: transparent; }}
 [data-testid="stMetricValue"] {{ font-size: 1.35rem; color: {BRIGHT}; font-variant-numeric: tabular-nums; }}
 
 /* side panel, folds, tables, forms */
-section[data-testid="stSidebar"] {{ background: #111317; border-right: 1px solid {BORDER}; }}
+section[data-testid="stSidebar"] {{ background: {SIDEBAR}; border-right: 1px solid {BORDER}; }}
 [data-testid="stExpander"] details {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 6px; }}
 [data-testid="stDataFrame"] {{ border: 1px solid {BORDER}; border-radius: 6px; }}
 [data-testid="stForm"] {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 6px; }}
@@ -86,7 +108,7 @@ section[data-testid="stSidebar"] {{ background: #111317; border-right: 1px solid
 /* yes / no checks */
 .checks {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
            column-gap: 28px; }}
-.check {{ display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid #23262c; color: {TEXT}; }}
+.check {{ display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid {LINE}; color: {TEXT}; }}
 .check b {{ width: 14px; text-align: center; }}
 
 /* score bars */
@@ -103,9 +125,12 @@ section[data-testid="stSidebar"] {{ background: #111317; border-right: 1px solid
 """
 
 
-def apply():
+def apply(mode=None):
     """Add the styling to the page. Call once, near the top of dashboard.py."""
-    st.markdown(CSS, unsafe_allow_html=True)
+    global MUTED
+    palette = PALETTES[mode or current_mode()]
+    MUTED = palette["MUTED"]
+    st.markdown(_css(**palette), unsafe_allow_html=True)
 
 
 def html(text):
@@ -168,3 +193,12 @@ def top_bar_brand():
 
 def as_of(text):
     html(f'<div class="as-of">{escape(text)}</div>')
+
+
+def market_banner(level, note):
+    """A coloured strip saying how far to trust the market today."""
+    colour = {"strong": GOOD, "caution": "#e3a008", "weak": BAD}[level]
+    html(f'<div class="plan" style="border-left:4px solid {colour};margin-bottom:12px;'
+         f'padding:11px 16px"><span style="color:{colour};font-weight:700">'
+         f'{level.capitalize()}</span><span class="plan-note" style="margin-left:12px">'
+         f'{escape(note.split(": ", 1)[-1])}</span></div>')

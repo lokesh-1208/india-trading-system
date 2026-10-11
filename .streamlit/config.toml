@@ -1,11 +1,17 @@
-# Look of the dashboard: a dark theme in the style of Zerodha Kite.
-# The rest of the styling is in trading/ui.py.
-[theme]
-base = "dark"
+# Look of the dashboard, in the style of Zerodha Kite. Two modes are defined.
+# Switch between them in the browser: menu at the top right > Settings >
+# Choose app theme. The rest of the styling is in trading/ui.py.
+[theme.dark]
 primaryColor = "#4184f3"
 backgroundColor = "#15171b"
 secondaryBackgroundColor = "#1e2126"
 textColor = "#d5d8dd"
+
+[theme.light]
+primaryColor = "#387ed1"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f6f7f9"
+textColor = "#3b4048"
 
 [browser]
 gatherUsageStats = false

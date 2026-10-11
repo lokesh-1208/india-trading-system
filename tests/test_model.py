@@ -176,3 +176,23 @@ def test_decision_puts_a_holding_past_its_stop_loss_on_the_sell_list(monkeypatch
     assert safe["sell"] == [] and safe["keep"] == ["GOOD"]
     hit = built.decision(["GOOD"], style="swing", buy_prices={"GOOD": price * 1.2})
     assert hit["sell"] == ["GOOD"] and hit["stopped"] == ["GOOD"] and hit["keep"] == []
+
+
+def test_swing_sells_when_the_trend_breaks_and_buys_only_rising_stocks(monkeypatch):
+    monkeypatch.setitem(config.MODEL_STYLES, "swing",
+                        {"check": "week", "positions": 3, "keep_rank": 3, "buy_rank": 3,
+                         "rank_exit": False, "stop_loss": 0.5, "trend_exit": True})
+    built = _model()
+    result = built.simulate(start="2025-07-01", capital=90_000, style="swing")
+    bought = set(result["trades"]["symbol"]) | set(result["positions"]["symbol"])
+    assert bought == {"GOOD"}              # POOR falls and MID is flat: neither is above its EMA
+    plan = built.decision(["POOR"], style="swing")
+    assert plan["sell"] == ["POOR"] and plan["trend_broken"] == ["POOR"]
+    assert plan["candidates"] == ["GOOD"]
+
+
+def test_market_level_names_the_state_of_the_market():
+    level, note = _model(0.0005).market_level()
+    assert level == "strong" and "2 of 2" in note
+    level, note = _model(-0.0005).market_level()
+    assert level == "weak" and "cash" in note

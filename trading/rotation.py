@@ -129,13 +129,16 @@ def scores_on(prepared, holdings, scoring_day):
 def _new_period(calendar, day, check):
     """Is this the first trading day of a new month (or week)?"""
     today, before = calendar[day], calendar[day - 1]
+    if check == "day":
+        return True
     if check == "week":
         return today.isocalendar()[:2] != before.isocalendar()[:2]
     return today.month != before.month
 
 
 def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None,
-             check="month", positions_wanted=None, keep_rank=None, stop_loss=None):
+             check="month", positions_wanted=None, keep_rank=None, stop_loss=None,
+             trend_exit=False, buy_rank=None):
     """Follow the rule day by day. Returns equity, trades, open positions and scores.
 
     scorer: optional. A function that takes a day's position in the calendar and
@@ -148,9 +151,16 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     inside. They default to the rotation's settings in config.py.
     stop_loss: for example 0.08. A holding that closes this far below its buy
     price is sold at the next open, on any day. None means no stop-loss.
+    trend_exit: True to follow each stock's own trend. A holding is sold the day
+    after it closes below its short trend line (prepared["in_trend"] is False),
+    and only stocks above that line are bought. So a trade lasts as long as its
+    trend does: a week for some, a month or more for others.
+    buy_rank: new stocks are bought only from this many top ranks (default: keep_rank).
     """
     positions_wanted = config.ROTATION_POSITIONS if positions_wanted is None else positions_wanted
     keep_rank = config.ROTATION_KEEP_RANK if keep_rank is None else keep_rank
+    buy_rank = keep_rank if buy_rank is None else buy_rank
+    in_trend = prepared["in_trend"].to_numpy(dtype=bool) if trend_exit else None
     capital = float(config.CAPITAL if capital is None else capital)
     calendar = prepared["calendar"]
     start = pd.Timestamp(config.ROTATION_START if start is None else start)
@@ -218,12 +228,14 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
 
     for day in range(first + 1, last + 1):
         yesterday = day - 1
-        if stop_loss is not None:
-            for symbol in list(positions):
-                floor = positions[symbol]["entry"] * (1 - stop_loss)
-                if last_close[yesterday, column[symbol]] <= floor \
-                        and not np.isnan(opens[day, column[symbol]]):
-                    sell(symbol, day, "stop-loss")
+        for symbol in list(positions):
+            if np.isnan(opens[day, column[symbol]]):
+                continue
+            floor = None if stop_loss is None else positions[symbol]["entry"] * (1 - stop_loss)
+            if floor is not None and last_close[yesterday, column[symbol]] <= floor:
+                sell(symbol, day, "stop-loss")
+            elif trend_exit and not in_trend[yesterday, column[symbol]]:
+                sell(symbol, day, "trend broke")
 
         if _new_period(calendar, day, check):
             scores = current_scores(yesterday)
@@ -241,8 +253,10 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
 
                 account = equity[-1]
                 blocked = _blocked(scores)
-                for symbol in ranked[:keep_rank]:
+                for symbol in ranked[:buy_rank]:
                     if symbol in blocked:
+                        continue
+                    if trend_exit and not in_trend[yesterday, column[symbol]]:
                         continue
                     if len(positions) >= positions_wanted:
                         break
@@ -307,7 +321,7 @@ def _latest_scores(prepared, holdings, day_position):
 
 
 def decision(prepared, holdings, held_symbols, scorer=None, check="month",
-             positions_wanted=None, keep_rank=None):
+             positions_wanted=None, keep_rank=None, buy_rank=None):
     """What the rule says to do, given the stocks you really hold.
 
     The rule acts once a month, at the open of the first trading day, using
@@ -325,7 +339,9 @@ def decision(prepared, holdings, held_symbols, scorer=None, check="month",
     calendar = prepared["calendar"]
     last = len(calendar) - 1
     next_weekday = calendar[last] + pd.offsets.BDay(1)
-    if check == "week":
+    if check == "day":
+        due_next_session = True
+    elif check == "week":
         due_next_session = next_weekday.isocalendar()[:2] != calendar[last].isocalendar()[:2]
     else:
         due_next_session = next_weekday.month != calendar[last].month
@@ -363,7 +379,7 @@ def decision(prepared, holdings, held_symbols, scorer=None, check="month",
         keep = [s for s in held if s not in sell]
         room = max(0, positions_wanted - len(keep))
         blocked = _blocked(scores)
-        candidates = [s for s in ranked[:keep_rank]
+        candidates = [s for s in ranked[:keep_rank if buy_rank is None else buy_rank]
                       if s not in keep and s not in blocked]
         buy = candidates[:room]
 

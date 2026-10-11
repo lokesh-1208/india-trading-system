@@ -15,9 +15,11 @@ global markets, the rupee, crude oil, gold, FII buying). New money goes in
 only when at least half of them pass; otherwise the rule holds cash.
 
 The same score can be traded in two styles (MODEL_STYLES in config.py):
-  - swing:   checked on the first trading day of every week, 5 stocks in equal
-             amounts, a holding is kept while it stays in the top 10, and any
-             holding that closes 8% below its buy price is sold the next day.
+  - swing:   follows each stock's own trend. On the first trading day of every
+             week it buys from the top 10 scores, 5 stocks in equal amounts,
+             only stocks above their 20-day EMA. A holding is sold the day
+             after it closes below that EMA, or 8% below its buy price. So a
+             trade lasts as long as its trend: a week for some, a month for others.
   - monthly: checked on the first trading day of each month, 10 stocks, kept
              while in the top 20, no stop-loss.
 A stock with results due in the next few days is not bought. The lowest
@@ -302,7 +304,10 @@ class Model:
         self.checks = market_checks(nifty, markets, get("fii_net"))
         self.market_score = market_score(self.checks)
         self.market_ok = (self.market_score >= config.MODEL_MARKET_MIN).fillna(False)
-        self.trading = {**self.prepared, "market_ok": self.market_ok,
+        # A stock is "in trend" while it closes above its short trend line (20-day EMA).
+        close = self.prepared["last_close"]
+        in_trend = (close > indicators.ema(close, config.EMA_FAST)).fillna(False)
+        self.trading = {**self.prepared, "market_ok": self.market_ok, "in_trend": in_trend,
                         "cash_reason": "too few market checks passed"}
         self._cache = {}
 
@@ -426,7 +431,8 @@ class Model:
         return rotation.simulate(
             self.trading, None, start, end, capital, scorer=self.score_on,
             check=rules["check"], positions_wanted=rules["positions"],
-            keep_rank=rules["keep_rank"], stop_loss=rules["stop_loss"])
+            keep_rank=_keep_rank(rules), stop_loss=rules["stop_loss"],
+            trend_exit=rules.get("trend_exit", False), buy_rank=rules.get("buy_rank"))
 
     def decision(self, held_symbols, style=None, buy_prices=None):
         """What the model says to do now, given the stocks you really hold.
@@ -437,9 +443,21 @@ class Model:
         rules = config.MODEL_STYLES[style or config.MODEL_STYLE]
         plan = rotation.decision(
             self.trading, None, held_symbols, scorer=self.score_on, check=rules["check"],
-            positions_wanted=rules["positions"], keep_rank=rules["keep_rank"])
+            positions_wanted=rules["positions"], keep_rank=_keep_rank(rules),
+            buy_rank=rules.get("buy_rank"))
+        plan["keep_rank"] = rules["keep_rank"] if rules.get("rank_exit", True) else None
         plan["stop_loss"] = rules["stop_loss"]
+        plan["trend_exit"] = bool(rules.get("trend_exit"))
         plan["stopped"] = []
+        plan["trend_broken"] = []
+        if rules.get("trend_exit") and plan["market_ok"]:
+            in_trend = self.trading["in_trend"].iloc[-1]
+            plan["trend_broken"] = [s for s in plan["keep"] if not bool(in_trend.get(s, True))]
+            plan["sell"] = plan["sell"] + plan["trend_broken"]
+            plan["keep"] = [s for s in plan["keep"] if s not in plan["trend_broken"]]
+            plan["candidates"] = [s for s in plan["candidates"] if bool(in_trend.get(s, False))]
+            plan["room"] = max(0, rules["positions"] - len(plan["keep"]))
+            plan["buy"] = plan["candidates"][:plan["room"]]
         if rules["stop_loss"] is not None and buy_prices:
             for symbol, paid in buy_prices.items():
                 price = plan["last_price"].get(symbol)
@@ -456,7 +474,29 @@ class Model:
         plan["weakest"] = today.tail(config.MODEL_WEAKEST).iloc[::-1]
         plan["checks"] = self.checks.iloc[-1]
         plan["market_score"] = float(self.market_score.iloc[-1])
+        plan["market_level"], plan["market_note"] = self.market_level()
         return plan
+
+    def market_level(self):
+        """How far to trust the market today: "strong", "caution" or "weak", with a sentence."""
+        checks = self.checks.iloc[-1].dropna()
+        passed, known = int(checks.sum()), len(checks)
+        above_average = bool(self.prepared["market_ok"].iloc[-1])
+        count = f"{passed} of {known} market checks pass"
+        if not bool(self.market_ok.iloc[-1]):
+            return "weak", f"Weak market: only {count}. The model holds cash."
+        if above_average and self.market_score.iloc[-1] >= config.MODEL_STRONG_MARKET:
+            return "strong", (f"Strong market: {count} and Nifty is above its "
+                              f"{config.ROTATION_MARKET_SMA}-day average.")
+        reason = ("" if above_average else
+                  f" and Nifty is below its {config.ROTATION_MARKET_SMA}-day average")
+        return "caution", (f"Caution: the model allows buying, but only {count}{reason}. "
+                           "Consider smaller amounts or waiting.")
+
+
+def _keep_rank(rules):
+    """The rank a holding must stay inside, or no limit when the style has no rank exit."""
+    return rules["keep_rank"] if rules.get("rank_exit", True) else 10 ** 9
 
 
 def from_disk(stocks, nifty):

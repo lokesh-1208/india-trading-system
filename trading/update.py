@@ -7,7 +7,7 @@ button on the dashboard, so both always do exactly the same thing.
 import time
 
 import config
-from trading import data, fundamentals, flows, news, shareholding
+from trading import data, fundamentals, flows, news, shareholding, shorts
 
 BATCH = 60
 
@@ -55,6 +55,7 @@ def run_update(include_company_data=None, report=None):
         summary["news_problem"] = str(error)
     try:
         flows.update()
+        shorts.update_lots()         # which stocks have futures, and their lot sizes
     except Exception as error:
         summary["flows_problem"] = str(error)
     report("Company announcements", 1, 1)

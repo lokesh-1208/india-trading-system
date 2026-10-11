@@ -19,6 +19,7 @@ PRICES_CACHE = DATA_DIR / "prices_cache.pkl"   # all price files combined, for s
 MARKET_DIR = DATA_DIR / "market"      # Nifty, India VIX, global indices
 REPORTS_DIR = ROOT / "reports"
 JOURNAL_FILE = ROOT / "journal" / "trades.csv"
+REAL_TRADES_FILE = ROOT / "journal" / "real_trades.csv"   # your real-money trades
 
 # ------------------------------------------------------------------- data ---
 HISTORY_START = "2015-01-01"
@@ -120,5 +121,17 @@ SCORE_MAX_DEBT_TO_EQUITY = 1.0       # not applied to banks and finance companie
 # companies make to NSE.
 SHAREHOLDING_FILE = FUNDAMENTALS_DIR / "shareholding.csv"
 FUND_HOLDERS_FILE = FUNDAMENTALS_DIR / "mutual_fund_holders.csv"
-SHAREHOLDING_QUARTERS = 2        # how many recent quarters to download per company
+SHAREHOLDING_QUARTERS = 20       # about 5 years. Each quarter is downloaded only once,
+                                 # so the first run is long and later runs are quick.
 NSE_SITE = "https://www.nseindia.com"
+
+# ----------------------------------------- ownership rotation (rule set D) --
+# Hold the stocks where foreign funds and mutual funds raised their holding
+# last quarter and the price has been strong. See trading/rotation.py.
+ROTATION_POSITIONS = 10          # stocks held, in equal amounts
+ROTATION_KEEP_RANK = 20          # a holding is kept while it stays in the top 20
+ROTATION_MOMENTUM_DAYS = 126     # price strength over about 6 months
+ROTATION_FILING_DAYS = 30        # wait this long after a quarter ends for filings
+ROTATION_MARKET_SMA = 200        # all cash while Nifty is below this average
+ROTATION_START = "2022-02-01"    # the shareholding history begins in late 2021
+PAPER_START = "2026-10-12"       # paper portfolio: followed from this day, no real money

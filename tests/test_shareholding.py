@@ -105,3 +105,30 @@ def test_summary_with_one_quarter_has_no_change_figures():
 
 def test_no_shareholding_data_gives_none():
     assert shareholding.summary(None) is None
+
+
+def test_only_quarter_end_filings_are_kept():
+    assert shareholding.is_quarter_end(pd.Timestamp("2026-06-30"))
+    assert shareholding.is_quarter_end(pd.Timestamp("2025-12-31"))
+    assert not shareholding.is_quarter_end(pd.Timestamp("2024-10-29"))   # filed after a bonus issue
+    assert not shareholding.is_quarter_end(pd.Timestamp("2026-07-31"))   # month end, not a quarter end
+
+
+OLDEST_FORMAT = "".join([
+    _fact("ShareholdingOfPromoterAndPromoterGroupI", "50.61"),
+    _fact("MutualFundsOrUtiI", "4.6"),
+    _fact("InsuranceCompaniesI", "6.22"),
+    _fact("ForeignVentureCapitalInvestorsI", "0"),
+    _fact("InstitutionsForeignPortfolioInvestorI", "25.39"),
+    _fact("InstitutionsI", "38.61"),
+    _fact("ShareholdingPatternI", "100"),
+])
+
+
+def test_oldest_format_splits_institutions_into_foreign_and_indian():
+    holdings, funds = shareholding.parse_filing(OLDEST_FORMAT)
+    assert holdings["promoter"] == 50.61
+    assert holdings["fii"] == 25.39
+    assert holdings["dii"] == 13.22            # 38.61 institutions - 25.39 foreign
+    assert holdings["mutual_funds"] == 4.6
+    assert holdings["public"] == 10.78         # 100 - 50.61 - 25.39 - 13.22

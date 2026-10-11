@@ -131,7 +131,7 @@ OWNER_GROUPS = [
 
 def ownership_bars(rows):
     """Who owns the company, one bar per quarter, each adding up to 100%."""
-    rows = rows.sort_values("quarter_end")
+    rows = rows.sort_values("quarter_end").tail(8)      # the last two years
     labels = [day.strftime("%b %Y") for day in rows["quarter_end"]]
     figure = go.Figure()
     for column, name, colour in OWNER_GROUPS:

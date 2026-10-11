@@ -8,8 +8,8 @@ import pandas as pd
 import streamlit as st
 
 import config
-from trading import (backtest, charts, company, data, indicators, journal, report,
-                     rotation, shareholding, update)
+from trading import (backtest, charts, company, data, flows, indicators, journal, news,
+                     report, rotation, shareholding, update)
 from trading.screens import Screens
 
 st.set_page_config(page_title="India Trading System", layout="wide")
@@ -67,6 +67,71 @@ def load_rotation():
         load_stocks(), load_nifty(),
         lambda symbol, dates: data.membership_mask(symbol, dates, membership))
     return prepared, holdings
+
+
+@st.cache_resource(show_spinner=False)
+def load_news():
+    return news.load()
+
+
+@st.cache_resource(show_spinner=False)
+def load_flows():
+    return flows.load_flows(), flows.load_deals()
+
+
+def show_news(rows, with_symbol=False):
+    """A table of announcements with a link to each filing."""
+    table = pd.DataFrame({
+        "Date": rows["time"].dt.strftime("%d %b %Y"),
+        **({"Stock": rows["symbol"]} if with_symbol else {}),
+        "Type": rows["category"],
+        "What it says": [detail or subject
+                         for detail, subject in zip(rows["detail"], rows["subject"])],
+        "Filing": rows["link"],
+    })
+    st.dataframe(table, hide_index=True, use_container_width=True,
+                 column_config={"Filing": st.column_config.LinkColumn("Filing", display_text="open"),
+                                "What it says": st.column_config.TextColumn(width="large")})
+
+
+def money_flow_section():
+    """Market page: what institutions bought and sold, and the large deals."""
+    st.subheader("Who is buying and selling")
+    flow_table, deals = load_flows()
+    net = flows.daily_net(flow_table)
+    if len(net) == 0:
+        st.info("No FII/DII figures yet. Press 'Update data now' in the sidebar.")
+        return
+    day = net.index[-1]
+    fii, dii = net["FII"].iloc[-1], net["DII"].iloc[-1]
+    one, two, three = st.columns(3)
+    one.metric(f"Foreign institutions, {day:%d %b}", f"Rs {fii:+,.0f} cr",
+               "bought more than they sold" if fii > 0 else "sold more than they bought",
+               delta_color="off")
+    two.metric(f"Indian institutions, {day:%d %b}", f"Rs {dii:+,.0f} cr",
+               "bought more than they sold" if dii > 0 else "sold more than they bought",
+               delta_color="off")
+    three.metric("Days of history saved", len(net))
+    if len(net) >= 2:
+        show(charts.flows_bars(net))
+    st.caption("NSE gives only the latest day, so this history grows by one day each time "
+               "you update. A day without an update is missed.")
+
+    recent = flows.deals_for(deals, set(load_stocks()), days=10)
+    st.markdown("**Bulk and block deals in Nifty 500 stocks, last 10 days**")
+    if len(recent) == 0:
+        st.write("None recorded.")
+    else:
+        st.dataframe(pd.DataFrame({
+            "Date": recent["date"].dt.strftime("%d %b"),
+            "Stock": recent["symbol"],
+            "Deal": recent["kind"],
+            "Who": recent["client"],
+            "Side": recent["side"],
+            "Shares": recent["quantity"].map("{:,.0f}".format),
+            "Price": recent["price"].round(2),
+            "Value (Rs cr)": recent["value_crore"].round(1),
+        }), hide_index=True, use_container_width=True)
 
 
 def saved_backtest():
@@ -136,6 +201,8 @@ def market_page():
     with right:
         st.markdown("**The same figures as a table**")
         st.dataframe(dashboard, hide_index=True, use_container_width=True)
+
+    money_flow_section()
 
 
 def shortlist_page():
@@ -301,6 +368,27 @@ def company_page():
                              hide_index=True, use_container_width=True)
             else:
                 st.write("No single scheme holds over 1%.")
+
+    # ---- news ----
+    st.subheader("News and announcements")
+    announcements = load_news()
+    if len(announcements) == 0:
+        st.info("No announcements yet. Press 'Update data now' in the sidebar.")
+    else:
+        everything = st.toggle("Also show routine paperwork", key="news_all")
+        rows = news.for_symbol(announcements, symbol, days=90, important_only=not everything)
+        if len(rows) == 0:
+            st.write("Nothing important in the last 90 days "
+                     f"(announcements saved from {announcements['time'].min():%d %b %Y}).")
+        else:
+            show_news(rows)
+    _, deals = load_flows()
+    stock_deals = flows.deals_for(deals, [symbol], days=90)
+    if len(stock_deals):
+        st.markdown("**Bulk and block deals in this stock**")
+        st.dataframe(stock_deals[["date", "kind", "client", "side", "quantity", "price",
+                                  "value_crore"]].round(2),
+                     hide_index=True, use_container_width=True)
 
     # ---- scorecard ----
     st.subheader(f"Scorecard: {company.score(card, financial)} of 10")
@@ -518,6 +606,20 @@ def rotation_page():
                               for s in top["symbol"]],
             }), hide_index=True, use_container_width=True)
 
+    watched = list(dict.fromkeys(held + list(plan["buy"]) + list(ranking.index[:10])))
+    announcements = load_news()
+    recent = announcements[announcements["symbol"].isin(watched) & announcements["important"]
+                           & (announcements["time"] >= pd.Timestamp.today()
+                              - pd.Timedelta(days=14))]
+    with st.expander(f"News on your stocks and the rule's top 10, last 14 days ({len(recent)})"):
+        if len(announcements) == 0:
+            st.write("No announcements yet. Press 'Update data now' in the sidebar.")
+        elif len(recent) == 0:
+            st.write("Nothing important.")
+        else:
+            st.caption("Read these before you place an order. The rule itself does not use news.")
+            show_news(recent, with_symbol=True)
+
     with st.expander("Paper portfolio: the rule followed exactly, with no real money"):
         paper_start = pd.Timestamp(config.PAPER_START)
         if nifty.index[-1] <= paper_start:
@@ -599,6 +701,10 @@ if st.sidebar.button("Update data now", type="primary"):
             note += " No data for: " + ", ".join(summary["failed_markets"]) + "."
         if summary["shareholding_problem"]:
             note += " Shareholding could not be refreshed."
+        if summary["news_problem"] or summary["flows_problem"]:
+            note += " NSE announcements or FII/DII figures could not be downloaded."
+        else:
+            note += f" {summary['news_added']} new announcements."
         st.session_state["update_note"] = note
     except Exception as error:
         st.session_state["update_note"] = f"The update stopped: {error}"

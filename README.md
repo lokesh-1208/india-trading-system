@@ -22,7 +22,7 @@ pip install -r requirements.txt
 
 | Step | Command | What it does |
 |---|---|---|
-| 1 | `python update_data.py` | Downloads the index membership history, prices for about 800 stocks, Nifty, India VIX, global markets and (weekly) company results and shareholding into `data/`. Takes a few minutes. |
+| 1 | `python update_data.py` | Downloads the index membership history, prices for about 800 stocks, Nifty, India VIX, global markets, company announcements, FII/DII figures, bulk and block deals, and (weekly) company results and shareholding into `data/`. Takes a few minutes. |
 | 2 | `python run_backtest.py` | Tests the rules from 2015 to today and compares the result with Nifty buy-and-hold. |
 | 3 | `python daily_report.py` | Prints the market dashboard and the shortlist from the last close. |
 | Dashboard | `streamlit run dashboard.py` | Opens the dashboard in your browser: market, shortlist, company and backtest pages with charts. Its "Update data now" button does the same job as `update_data.py`. |
@@ -84,6 +84,9 @@ trading/backtest.py  day-by-day simulation and results
 trading/rotation.py  rule set D: the ownership rotation (FII and mutual fund buying plus price strength)
 trading/journal.py   your real-money trades (kept in journal/real_trades.csv, not on GitHub)
 trading/report.py    daily dashboard and shortlist
+trading/nse.py       opens a session with the NSE website (used by the three below)
+trading/news.py      company announcements to NSE, sorted into plain categories
+trading/flows.py     daily FII/DII buying and selling, bulk and block deals
 trading/update.py    refreshes all data; shared by update_data.py and the dashboard button
 trading/charts.py    the charts used by the dashboard
 dashboard.py         the browser dashboard (Streamlit)

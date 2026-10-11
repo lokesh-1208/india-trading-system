@@ -1,4 +1,5 @@
-"""Step 1: download prices, index membership, company results and shareholding.
+"""Step 1: download prices, index membership, company announcements, FII/DII
+figures, large deals, company results and shareholding.
 
 Run:  python update_data.py
       python update_data.py --fundamentals     (force a refresh of company results
@@ -30,4 +31,10 @@ else:
     print(f"Company results are {update.company_data_age_days():.0f} days old; not refreshed.")
 if summary["shareholding_problem"]:
     print(f"Could not finish the shareholding download: {summary['shareholding_problem']}")
+if summary["news_problem"]:
+    print(f"Could not download company announcements: {summary['news_problem']}")
+else:
+    print(f"New company announcements saved: {summary['news_added']}")
+if summary["flows_problem"]:
+    print(f"Could not download FII/DII figures and large deals: {summary['flows_problem']}")
 print("Downloads finished.")

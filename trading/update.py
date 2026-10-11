@@ -7,7 +7,7 @@ button on the dashboard, so both always do exactly the same thing.
 import time
 
 import config
-from trading import data, fundamentals, shareholding
+from trading import data, fundamentals, flows, news, shareholding
 
 BATCH = 60
 
@@ -26,7 +26,7 @@ def company_data_is_due():
 
 
 def run_update(include_company_data=None, report=None):
-    """Download prices, and company data when it is due (or when asked).
+    """Download prices, announcements and money flows, and company data when it is due.
 
     include_company_data: True to force it, False to skip it, None to decide by age.
     report(step, done, total) is called as the work moves along.
@@ -42,7 +42,22 @@ def run_update(include_company_data=None, report=None):
         "stocks_without_data": len(failed_stocks),
         "company_data_refreshed": False,
         "shareholding_problem": None,
+        "news_added": 0,
+        "news_problem": None,
+        "flows_problem": None,
     }
+
+    # Announcements and money flows are quick, so they refresh on every update.
+    report("Company announcements", 0, 1)
+    try:
+        summary["news_added"] = news.update(list(data.load_universe()["Symbol"]))
+    except Exception as error:
+        summary["news_problem"] = str(error)
+    try:
+        flows.update()
+    except Exception as error:
+        summary["flows_problem"] = str(error)
+    report("Company announcements", 1, 1)
     if not include_company_data:
         return summary
 

@@ -135,3 +135,10 @@ ROTATION_FILING_DAYS = 30        # wait this long after a quarter ends for filin
 ROTATION_MARKET_SMA = 200        # all cash while Nifty is below this average
 ROTATION_START = "2022-02-01"    # the shareholding history begins in late 2021
 PAPER_START = "2026-10-12"       # paper portfolio: followed from this day, no real money
+
+# ------------------------------------------------- news and money flows -----
+ANNOUNCEMENTS_FILE = DATA_DIR / "news" / "announcements.csv"   # company announcements to NSE
+FII_DII_FILE = DATA_DIR / "flows" / "fii_dii.csv"              # daily buying and selling
+LARGE_DEALS_FILE = DATA_DIR / "flows" / "large_deals.csv"      # bulk and block deals
+ANNOUNCEMENT_DAYS_FIRST_RUN = 10     # how far back the first download goes
+ANNOUNCEMENT_DAYS_KEPT = 400         # older announcements are dropped from the file

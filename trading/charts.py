@@ -153,6 +153,24 @@ def ownership_bars(rows):
         legend={"traceorder": "normal", "y": -0.28, "yanchor": "top"})
 
 
+# ------------------------------------------------------------------- flows --
+def flows_bars(net, days=30):
+    """Net buying by foreign and Indian institutions on each day, in Rs crore."""
+    table = net.tail(days)
+    labels = [day.strftime("%d %b") for day in table.index]
+    figure = go.Figure([
+        go.Bar(x=labels, y=table["FII"], name="Foreign institutions (FII)",
+               marker={"color": BLUE}, hovertemplate="%{y:+,.0f}<extra>FII</extra>"),
+        go.Bar(x=labels, y=table["DII"], name="Indian institutions (DII)",
+               marker={"color": ORANGE}, hovertemplate="%{y:+,.0f}<extra>DII</extra>"),
+    ])
+    figure.update_layout(barmode="group")
+    figure.add_hline(y=0, line={"color": MUTED, "width": 1})
+    figure.update_xaxes(type="category")
+    return _style(figure, "Net buying each day (above zero = bought more than sold)",
+                  height=320, y_title="Rs crore")
+
+
 # ---------------------------------------------------------------- backtest --
 def growth_chart(equity, benchmark, capital):
     """The account against Nifty, both starting from the same amount."""

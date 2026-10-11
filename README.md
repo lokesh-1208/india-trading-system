@@ -81,6 +81,8 @@ trading/company.py   the company card: valuation, growth, dividend yield, indust
 trading/shareholding.py  who owns each company: promoters, FII, DII, mutual funds, public
 trading/charges.py   Zerodha delivery charges
 trading/backtest.py  day-by-day simulation and results
+trading/rotation.py  rule set D: the ownership rotation (FII and mutual fund buying plus price strength)
+trading/journal.py   your real-money trades (kept in journal/real_trades.csv, not on GitHub)
 trading/report.py    daily dashboard and shortlist
 trading/update.py    refreshes all data; shared by update_data.py and the dashboard button
 trading/charts.py    the charts used by the dashboard
@@ -131,8 +133,13 @@ into `data/universe/`. It is not stored in this repository.
 
 ## Results so far
 
-No rule set tested so far has qualified for real money. The rules in this version
-lost money from 2015 to 2026 after charges. See the backtest log kept with the project.
+- **Swing rules (the Shortlist and Backtest pages):** lost money from 2015 to 2026
+  after charges. Not for real money.
+- **Ownership rotation (rule set D):** from February 2022 to October 2026 it grew about
+  21% a year against about 5% for Nifty, with a worst drawdown of about 19% against
+  Nifty's 16%. This is a lead, not a proven system: the history is under five years
+  and the ingredients were chosen after looking at that same period. It is being
+  followed as a paper portfolio, with no real money, from 12 October 2026.
 
 ## Data sources
 

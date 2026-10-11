@@ -7,6 +7,8 @@ quarter. From that filing we take the share held by:
   - DII            Indian institutions (mutual funds, insurers, pension funds, banks)
   - mutual funds   a part of DII, shown separately
   - public         everyone else, mostly individual investors
+Each row also keeps the date the company filed it, so a backtest can use a
+quarter's figures only from the day they became public.
 and the names of the mutual fund schemes that hold more than 1% of the
 company (the filing names only holders above 1%).
 """
@@ -20,13 +22,13 @@ import pandas as pd
 import config
 
 SHAREHOLDING_COLUMNS = [
-    "symbol", "quarter_end", "promoter", "fii", "dii", "mutual_funds", "insurance",
-    "public", "promoters_pledged",
+    "symbol", "quarter_end", "filed_on", "promoter", "fii", "dii", "mutual_funds",
+    "insurance", "public", "promoters_pledged",
 ]
 HOLDER_COLUMNS = ["symbol", "quarter_end", "fund", "percent"]
 
 # The filing's own names for each group. The exchange changed the file format
-# in late 2025, so older filings spell a few of these differently.
+# in 2022 and again in late 2025, so older filings spell these differently.
 GROUPS = {
     "promoter": ["shareholdingofpromoterandpromotergroup"],
     "fii": ["institutionsforeign"],
@@ -93,6 +95,14 @@ def parse_filing(xml_text):
             continue
         values = [holdings[name] for name in their_names if name in holdings]
         result[our_name] = round(values[0] * scale, 2) if values else 0.0
+
+    # Filings up to mid-2022 give one total for all institutions and list
+    # foreign investors inside it, with no foreign and Indian subtotals.
+    if "institutionsforeign" not in holdings and "institutions" in holdings:
+        foreign = (holdings.get("institutionsforeignportfolioinvestor", 0.0)
+                   + holdings.get("foreignventurecapitalinvestors", 0.0))
+        result["fii"] = round(foreign * scale, 2)
+        result["dii"] = round(max(0.0, holdings["institutions"] - foreign) * scale, 2)
     result["public"] = round(
         max(0.0, 100.0 - result["promoter"] - result["fii"] - result["dii"]), 2
     )
@@ -157,6 +167,15 @@ def _session():
     return session
 
 
+def is_quarter_end(day):
+    """True for the last days of March, June, September and December.
+
+    Companies also file after events such as a bonus issue. Those extra
+    filings are skipped so that every company has one row per quarter.
+    """
+    return day.month in (3, 6, 9, 12) and day.day >= 28
+
+
 def fetch_symbol(session, symbol, already_have=frozenset()):
     """Download the recent shareholding filings of one company.
 
@@ -179,8 +198,9 @@ def fetch_symbol(session, symbol, already_have=frozenset()):
         if len(seen) >= config.SHAREHOLDING_QUARTERS:
             break
         quarter = pd.to_datetime(filing.get("date"), format="%d-%b-%Y", errors="coerce")
+        filed = pd.to_datetime(filing.get("submissionDate"), format="%d-%b-%Y", errors="coerce")
         link = filing.get("xbrl") or ""
-        if pd.isna(quarter) or not link.lower().endswith(".xml"):
+        if pd.isna(quarter) or not is_quarter_end(quarter) or not link.lower().endswith(".xml"):
             continue
         quarter_text = str(quarter.date())
         if quarter_text in seen:
@@ -192,7 +212,9 @@ def fetch_symbol(session, symbol, already_have=frozenset()):
         percentages, funds = parse_filing(session.get(link, timeout=60).text)
         if percentages is None:
             continue
-        rows.append({"symbol": symbol, "quarter_end": quarter_text, **percentages})
+        rows.append({"symbol": symbol, "quarter_end": quarter_text,
+                     "filed_on": None if pd.isna(filed) else str(filed.date()),
+                     **percentages})
         houses += [{"symbol": symbol, "quarter_end": quarter_text,
                     "fund": name, "percent": percent}
                    for name, percent in funds]
@@ -206,7 +228,7 @@ def _append(path, columns, new_rows):
     new = new.drop_duplicates(subset=columns[:3] if "fund" in columns else columns[:2],
                               keep="last")
     path.parent.mkdir(parents=True, exist_ok=True)
-    new.sort_values(columns[:2]).to_csv(path, index=False)
+    new.reindex(columns=columns).sort_values(columns[:2]).to_csv(path, index=False)
 
 
 def update_shareholding(symbols, workers=3):
@@ -216,10 +238,11 @@ def update_shareholding(symbols, workers=3):
     this is quick. Returns (companies with new data, companies that failed).
     """
     stored = load_shareholding()
-    have = {} if stored is None else {
-        symbol: frozenset(rows["quarter_end"].dt.date.astype(str))
-        for symbol, rows in stored.groupby("symbol")
-    }
+    have = {}
+    if stored is not None:
+        complete = stored[stored["filed_on"].notna()]   # rows without a filing date are redone
+        have = {symbol: frozenset(rows["quarter_end"].dt.date.astype(str))
+                for symbol, rows in complete.groupby("symbol")}
     session = _session()
 
     def work(symbol):
@@ -245,7 +268,11 @@ def load_shareholding():
     """Shareholding by company and quarter, or None if not downloaded yet."""
     if not config.SHAREHOLDING_FILE.exists():
         return None
-    return pd.read_csv(config.SHAREHOLDING_FILE, parse_dates=["quarter_end"])
+    table = pd.read_csv(config.SHAREHOLDING_FILE, parse_dates=["quarter_end"])
+    if "filed_on" not in table.columns:      # a file saved by an older version
+        table["filed_on"] = pd.NaT
+    table["filed_on"] = pd.to_datetime(table["filed_on"], errors="coerce")
+    return table[table["quarter_end"].map(is_quarter_end)].reset_index(drop=True)
 
 
 def load_fund_holders():

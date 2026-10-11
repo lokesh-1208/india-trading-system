@@ -8,7 +8,8 @@ import pandas as pd
 import streamlit as st
 
 import config
-from trading import backtest, charts, company, data, indicators, report, update
+from trading import (backtest, charts, company, data, indicators, journal, report,
+                     rotation, shareholding, update)
 from trading.screens import Screens
 
 st.set_page_config(page_title="India Trading System", layout="wide")
@@ -53,6 +54,19 @@ def run_backtest_now():
               for symbol, prices in load_stocks().items()}
     result = backtest.run_backtest(stocks, nifty)
     return result["equity"], result["trades"]
+
+
+@st.cache_resource(show_spinner="Preparing the ownership rotation ...")
+def load_rotation():
+    """Price tables and shareholding history for the ownership rotation."""
+    holdings = shareholding.load_shareholding()
+    if holdings is None:
+        return None, None
+    membership = load_screens().membership
+    prepared = rotation.prepare(
+        load_stocks(), load_nifty(),
+        lambda symbol, dates: data.membership_mask(symbol, dates, membership))
+    return prepared, holdings
 
 
 def saved_backtest():
@@ -348,9 +362,210 @@ def backtest_page():
                "from the price data, so real results would be somewhat worse.")
 
 
+def _what_to_do(plan, trades, money):
+    """The action box at the top of the rotation page."""
+    prices = plan["last_price"]
+    budget = money / config.ROTATION_POSITIONS
+    open_rows = journal.open_positions(trades)
+    held_quantity = open_rows.groupby("symbol")["quantity"].sum()
+    last_day = prices.name
+    next_check = (last_day + pd.offsets.MonthBegin(1)).strftime("%B %Y")
+
+    # Fill the free places from the best-ranked stocks, passing over any whose
+    # single share costs more than the money per stock (as the tests did).
+    buys, too_dear = [], []
+    for symbol in plan["candidates"]:
+        if len(buys) >= plan["room"]:
+            break
+        price = float(prices.get(symbol, float("nan")))
+        quantity = int(budget // price) if price > 0 else 0
+        (buys if quantity >= 1 else too_dear).append((symbol, price, quantity))
+
+    with st.container(border=True):
+        st.markdown("#### What to do")
+        actions = len(plan["sell"]) + len(buys)
+        if actions == 0:
+            if plan["keep"]:
+                st.markdown("### ✋ Hold. Nothing to change.")
+                st.write("Your holdings are the ones the rule wants: " + ", ".join(plan["keep"]) + ".")
+            elif not plan["market_ok"]:
+                st.markdown("### 💤 Stay in cash. Nothing to buy.")
+                st.write(f"Nifty is below its {config.ROTATION_MARKET_SMA}-day average. "
+                         "The rule buys nothing until Nifty is back above it.")
+            else:
+                st.markdown("### 💤 Nothing to do yet.")
+                st.write("No scores are available. Update the data.")
+        else:
+            when = ("at the next market open" if plan["due_next_session"]
+                    else f"outstanding from the check on {plan['decided_on'].date()}")
+            st.markdown(f"### 📋 {actions} action{'s' if actions != 1 else ''} {when}")
+            for symbol in plan["sell"]:
+                quantity = int(held_quantity.get(symbol, 0))
+                reason = ("Nifty is below its average" if not plan["market_ok"]
+                          else f"it fell out of the top {config.ROTATION_KEEP_RANK}")
+                st.markdown(f"🔴 **Sell {symbol}**: all {quantity} shares, because {reason}.")
+            for symbol, price, quantity in buys:
+                st.markdown(f"🟢 **Buy {symbol}**: {quantity} shares at about Rs {price:,.2f} "
+                            f"(about Rs {quantity * price:,.0f}).")
+            for symbol in plan["keep"]:
+                st.markdown(f"✋ **Hold {symbol}**.")
+            if too_dear:
+                names = ", ".join(f"{symbol} (Rs {price:,.0f} a share)" for symbol, price, _ in too_dear)
+                st.caption(f"Passed over because one share costs more than the Rs {budget:,.0f} "
+                           f"set aside per stock: {names}.")
+            if not plan["due_next_session"] and not len(open_rows):
+                st.caption("The rule has held these since the start of the month. In the tests "
+                           "it only bought on the first trading day of a month.")
+        st.caption(f"The rule is checked once a month. Next check: first trading day of "
+                   f"{next_check}. Prices are from {last_day.date()}.")
+
+
+def _my_trades(trades, prices, symbols):
+    """Your real positions, with forms to record a buy and a sell."""
+    st.subheader("My real trades")
+    totals = journal.totals(trades, prices)
+    one, two, three, four = st.columns(4)
+    one.metric("Money in the market", f"Rs {totals['invested']:,.0f}")
+    two.metric("Worth now", f"Rs {totals['value']:,.0f}")
+    three.metric("Gain on open positions", f"Rs {totals['open_gain']:+,.0f}")
+    four.metric("Profit on closed trades", f"Rs {totals['closed_profit']:+,.0f}")
+
+    positions = journal.open_positions(trades, prices)
+    if len(positions):
+        shown = positions[["symbol", "buy_date", "buy_price", "quantity", "cost",
+                           "last_price", "value", "gain", "gain_%", "note"]].round(2)
+        st.dataframe(shown, hide_index=True, use_container_width=True)
+    else:
+        st.write("No open positions recorded.")
+
+    left, right = st.columns(2)
+    with left, st.form("record_buy", clear_on_submit=True):
+        st.markdown("**Record a buy**")
+        symbol = st.selectbox("Stock", symbols)
+        day = st.date_input("Date bought")
+        price = st.number_input("Price paid per share (Rs)", min_value=0.0, step=0.05)
+        quantity = st.number_input("Number of shares", min_value=0, step=1)
+        note = st.text_input("Note (why you bought it)")
+        if st.form_submit_button("Save buy"):
+            try:
+                journal.save(journal.record_buy(trades, symbol, day, price, quantity, note))
+                st.rerun()
+            except ValueError as problem:
+                st.error(str(problem))
+    with right, st.form("record_sell", clear_on_submit=True):
+        st.markdown("**Record a sell**")
+        labels = {f"{row.symbol}: {int(row.quantity)} shares bought {row.buy_date}": number
+                  for number, row in positions.iterrows()}
+        choice = st.selectbox("Position", list(labels) or ["No open positions"])
+        day = st.date_input("Date sold")
+        price = st.number_input("Price received per share (Rs)", min_value=0.0, step=0.05)
+        if st.form_submit_button("Save sell") and labels:
+            try:
+                journal.save(journal.record_sell(trades, labels[choice], day, price))
+                st.rerun()
+            except ValueError as problem:
+                st.error(str(problem))
+
+    closed = journal.closed_trades(trades)
+    if len(closed):
+        with st.expander(f"Closed trades ({len(closed)})"):
+            st.dataframe(closed.round(2), hide_index=True, use_container_width=True)
+    st.caption("Saved in journal/real_trades.csv on this computer only. Keep your own "
+               "backup. Profit figures are before charges and tax.")
+
+
+def rotation_page():
+    st.title("Ownership rotation")
+    st.caption("Hold the 10 stocks where foreign funds and mutual funds raised their holding "
+               "last quarter and the price has been strong. Checked once a month. All cash "
+               f"while Nifty is below its {config.ROTATION_MARKET_SMA}-day average.")
+
+    prepared, holdings = load_rotation()
+    if prepared is None:
+        st.info("No shareholding history yet. Tick the box in the sidebar and press "
+                "'Update data now'.")
+        return
+    nifty = load_nifty()
+    trades = journal.load()
+    held = list(journal.open_positions(trades)["symbol"].unique())
+    plan = rotation.decision(prepared, holdings, held)
+
+    money = st.number_input("Money you have set aside for this rule (Rs)", min_value=10_000,
+                            value=int(config.CAPITAL), step=5_000,
+                            help=f"It is split equally across {config.ROTATION_POSITIONS} stocks.")
+    _what_to_do(plan, trades, money)
+    _my_trades(trades, plan["last_price"], sorted(load_stocks()))
+
+    # ---- details, folded away ----
+    st.subheader("Details")
+    ranking = plan["ranking"]
+    with st.expander(f"The rule's ranking: top {config.ROTATION_KEEP_RANK}"):
+        if len(ranking) == 0:
+            st.write("No scores yet.")
+        else:
+            top = ranking.reset_index(names="symbol")
+            st.caption(f"Scored on {plan['scoring_day'].date()}. The top "
+                       f"{config.ROTATION_POSITIONS} are bought; a holding is kept while it "
+                       f"stays in the top {config.ROTATION_KEEP_RANK}.")
+            st.dataframe(pd.DataFrame({
+                "rank": range(1, len(top) + 1),
+                "symbol": top["symbol"],
+                "score": top["score"].round(3),
+                "FII holding change": top["fii_change"].round(2),
+                "MF holding change": top["mf_change"].round(2),
+                "6-month price change %": (top["momentum"] * 100).round(1),
+                "price now": [round(float(plan["last_price"].get(s, float("nan"))), 2)
+                              for s in top["symbol"]],
+            }), hide_index=True, use_container_width=True)
+
+    with st.expander("Paper portfolio: the rule followed exactly, with no real money"):
+        paper_start = pd.Timestamp(config.PAPER_START)
+        if nifty.index[-1] <= paper_start:
+            st.write(f"Starts on {paper_start.date()} with Rs {config.CAPITAL:,.0f}. "
+                     "It fills in as you update the data.")
+        else:
+            paper = rotation.simulate(prepared, holdings, start=paper_start)
+            value = float(paper["equity"].iloc[-1])
+            benchmark = nifty["Close"].reindex(paper["equity"].index).dropna()
+            one, two, three = st.columns(3)
+            one.metric(f"Value since {paper_start.date()}", f"Rs {value:,.0f}",
+                       pct(value / paper["capital"] - 1))
+            two.metric("Nifty over the same days",
+                       pct(benchmark.iloc[-1] / benchmark.iloc[0] - 1))
+            three.metric("Cash", f"Rs {paper['cash']:,.0f}")
+            if len(paper["positions"]):
+                st.dataframe(paper["positions"], hide_index=True, use_container_width=True)
+            if len(paper["trades"]):
+                st.dataframe(paper["trades"], hide_index=True, use_container_width=True)
+
+    with st.expander("How the rule did in the past"):
+        result = rotation.simulate(prepared, holdings)
+        summary, by_year = rotation.summarise(result, nifty)
+        st.caption(f"{summary['period_start']} to {summary['period_end']}, after charges, "
+                   f"starting with Rs {result['capital']:,.0f}.")
+        one, two, three, four = st.columns(4)
+        one.metric("Growth per year", pct(summary["annual_growth_rate"]),
+                   f"Nifty {pct(summary['benchmark_annual_growth_rate'])}", delta_color="off")
+        two.metric("Worst drawdown", pct(summary["max_drawdown"]),
+                   f"Nifty {pct(summary['benchmark_max_drawdown'])}", delta_color="off")
+        three.metric("Trades", summary["trades"],
+                     f"{pct(summary['win_rate'], signed=False)} won", delta_color="off")
+        four.metric("Charges paid", f"Rs {summary['total_charges']:,.0f}")
+        st.warning(
+            "A lead, not a proven system. The history is under five years, the three "
+            "ingredients were chosen after looking at this same period, and companies "
+            "delisted since 2022 are missing from the prices.", icon="⚠️")
+        show(charts.growth_chart(result["equity"],
+                                 nifty["Close"].reindex(result["equity"].index).dropna(),
+                                 result["capital"]))
+        show(charts.drawdown_chart(result["equity"]))
+        show(charts.yearly_bars(by_year))
+        st.dataframe(result["trades"], hide_index=True, use_container_width=True)
+
+
 # ---------------------------------------------------------------- start -----
-PAGES = {"Market": market_page, "Shortlist": shortlist_page,
-         "Company": company_page, "Backtest": backtest_page}
+PAGES = {"Ownership rotation": rotation_page, "Market": market_page,
+         "Company": company_page, "Shortlist": shortlist_page, "Backtest": backtest_page}
 
 if load_nifty() is None or not load_stocks():
     st.title("India Trading System")

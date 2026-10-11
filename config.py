@@ -161,11 +161,29 @@ MODEL_NEWS_DAYS = 30
 # Two ways to trade the same score. "swing" is checked every week and holds
 # for days to a few weeks; "monthly" is checked once a month.
 MODEL_STYLES = {
-    "swing": {"check": "week", "positions": 5, "keep_rank": 10, "stop_loss": 0.08},
-    "monthly": {"check": "month", "positions": 10, "keep_rank": 20, "stop_loss": None},
+    # Swing follows each stock's own trend: bought from the top 10 at the weekly
+    # check, held while it closes above its 20-day EMA, sold when it does not.
+    "swing": {"check": "week", "positions": 5, "keep_rank": 10, "buy_rank": 10,
+              "rank_exit": False, "stop_loss": 0.08, "trend_exit": True},
+    "monthly": {"check": "month", "positions": 10, "keep_rank": 20, "buy_rank": 20,
+                "rank_exit": True, "stop_loss": None, "trend_exit": False},
 }
 MODEL_STYLE = "swing"
+MODEL_STRONG_MARKET = 0.75     # at or above this share of checks, with Nifty above its
+                               # 200-day average, the market is called strong
 MODEL_WEAKEST = 10             # how many of the lowest scores to list as sell / avoid
+
+# ------------------------------------------------------------ short side ----
+# Selling first and buying back later, for the weakest scores. Two routes:
+# intraday (sell and buy back the same day) and stock futures (can be held).
+FO_LOTS_FILE = DATA_DIR / "universe" / "fo_lots.csv"     # which stocks have futures, lot sizes
+FO_LOTS_SOURCE = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+SHORT_POSITIONS = 5
+SHORT_POOL = 20                # shorts are picked from this many weakest scores
+SHORT_STOP_LOSS = 0.08         # cover if the price closes this far above the sell price
+SHORT_COST = 0.0003            # futures charges per side as a share of value (approximate)
+SHORT_ORDER_FEE = 20.0         # brokerage per futures order
+INTRADAY_STOP_ATR = 1.5        # intraday stop: this many ATRs above the sell price
 
 # ------------------------------------------------- news and money flows -----
 ANNOUNCEMENTS_FILE = DATA_DIR / "news" / "announcements.csv"   # company announcements to NSE

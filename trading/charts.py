@@ -14,9 +14,18 @@ import config
 # Colours, in the fixed order they are handed out to series.
 BLUE, ORANGE, AQUA, YELLOW = "#4184f3", "#f0884a", "#2bb89a", "#e3b23c"
 RED = "#e5534b"            # only as the opposite of blue: falls against rises
-SURFACE = "#15171b"          # the dashboard's dark background
-TEXT, MUTED, GRID = "#e8eaed", "#8b9099", "#262a31"
 ON_COLOUR = "#101216"        # text printed on top of a coloured bar
+SURFACE = "#15171b"          # the dashboard's background; set_mode() changes these four
+TEXT, MUTED, GRID = "#e8eaed", "#8b9099", "#262a31"
+
+
+def set_mode(mode):
+    """Match the charts to the dashboard's light or dark mode."""
+    global SURFACE, TEXT, MUTED, GRID
+    if mode == "light":
+        SURFACE, TEXT, MUTED, GRID = "#ffffff", "#16191d", "#6b7280", "#e6e8ec"
+    else:
+        SURFACE, TEXT, MUTED, GRID = "#15171b", "#e8eaed", "#8b9099", "#262a31"
 
 
 def _style(figure, title, height=360, y_title=None, legend=True):

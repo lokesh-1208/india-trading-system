@@ -221,3 +221,5 @@ __marimo__/
 data/
 reports/
 journal/
+# Windows shortcuts point to a path on one computer
+*.lnk

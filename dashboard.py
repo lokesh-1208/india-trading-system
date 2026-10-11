@@ -9,11 +9,13 @@ import streamlit as st
 
 import config
 from trading import (backtest, charts, company, data, flows, indicators, journal, model,
-                     news, report, rotation, shareholding, ui, update)
+                     news, report, rotation, shareholding, shorts, ui, update)
 from trading.screens import Screens
 
 st.set_page_config(page_title="India Trading System", layout="wide")
-ui.apply()
+MODE = ui.current_mode()        # light or dark, chosen in the browser's Settings menu
+ui.apply(MODE)
+charts.set_mode(MODE)
 
 PERIODS = {"6 months": 126, "1 year": 252, "3 years": 756, "All": None}
 
@@ -79,6 +81,12 @@ def load_model():
 @st.cache_resource(show_spinner="Running the full model through the past ...")
 def model_history(style):
     return load_model().simulate(start=config.ROTATION_START, style=style)
+
+
+@st.cache_resource(show_spinner="Testing the short side on past prices ...")
+def short_history(futures_only):
+    lots = set(shorts.load_lots()) if futures_only else None
+    return shorts.simulate(load_model(), start=config.ROTATION_START, futures_only=lots)
 
 
 @st.cache_resource(show_spinner=False)
@@ -504,8 +512,10 @@ def _what_to_do(plan, trades, money):
 
     foot = []
     if plan.get("stop_loss"):
-        foot.append(f"A holding that closes {plan['stop_loss']:.0%} below your buy price is "
-                    "sold the next day. Update the data daily to see it.")
+        foot.append(f"A holding that closes {plan['stop_loss']:.0%} below your buy price"
+                    + (f", or below its {config.EMA_FAST}-day EMA," if plan.get("trend_exit")
+                       else "")
+                    + " is sold the next day. Update the data daily to see it.")
     foot.append(f"Checked once a {period}. Next check: first trading day of {next_check}. "
                 f"Prices are from {last_day.date()}.")
 
@@ -531,6 +541,8 @@ def _what_to_do(plan, trades, money):
         quantity = int(held_quantity.get(symbol, 0))
         if symbol in plan.get("stopped", []):
             reason = f"{plan['stop_loss']:.0%} or more below your buy price (stop-loss)"
+        elif symbol in plan.get("trend_broken", []):
+            reason = f"closed below its {config.EMA_FAST}-day EMA (trend broke)"
         elif not plan["market_ok"]:
             reason = plan.get("sell_reason", "Nifty is below its average")
         else:
@@ -752,6 +764,76 @@ def _score_table(table):
     })
 
 
+def _short_side(built, money):
+    """The weakest scores, with what each short route would need."""
+    st.subheader("Sell side: the weakest scores")
+    st.caption("If you hold one of these, the model says exit. To sell a share you do not "
+               "hold there are two routes: intraday (bought back the same day) or stock "
+               "futures (can be held for days). Ordinary delivery shares cannot be sold short.")
+    lots = shorts.load_lots()
+    table = shorts.candidates(built, lots, capital=money)
+    past, _ = rotation.summarise(short_history(False), load_nifty())
+    if past["annual_growth_rate"] < 0:
+        st.error(f"In the test on past prices, shorting the weakest scores and holding for "
+                 f"days lost {-past['annual_growth_rate']:.0%} a year, with a worst fall of "
+                 f"{-past['max_drawdown']:.0%}. Use this list to exit or avoid, not to short, "
+                 "until a short rule passes a test.", icon="🛑")
+    falling = table["falling"].map({True: "falling", False: "above its EMA"})
+    intraday, futures = st.tabs(["Intraday route", "Futures route"])
+    with intraday:
+        st.caption(f"Sell in the morning, buy back before 3:15 pm. The size is set so that "
+                   f"hitting the stop loses {config.RISK_PER_TRADE:.0%} of your money "
+                   f"(Rs {money * config.RISK_PER_TRADE:,.0f}). The stop is "
+                   f"{config.INTRADAY_STOP_ATR} times the stock's normal daily move above the "
+                   "price. Zerodha asks for only part of the value as margin on intraday orders.")
+        st.dataframe(pd.DataFrame({
+            "symbol": table["symbol"], "score": table["score"].round(0),
+            "trend": falling, "price": table["price"].round(2),
+            "stop at": table["intraday_stop"].round(2),
+            "shares": table["intraday_shares"],
+            "value (Rs)": table["intraday_value"].round(0),
+            "results due": table["results_due"].map({True: "yes", False: ""}),
+        }), hide_index=True, use_container_width=True,
+            column_config={"score": SCORE_COLUMNS["score"]})
+        st.warning("This route is not tested. Testing it needs minute-by-minute prices, "
+                   "which the system does not have yet.", icon="⚠️")
+    with futures:
+        if not lots:
+            st.info("Lot sizes are not downloaded yet. Press 'Update data now' in the sidebar.")
+        st.caption("One lot is the smallest amount you can sell. 'Move of 1%' is what you "
+                   "gain or lose on one lot when the price moves 1%. The margin Zerodha blocks "
+                   "is a part of the lot value; check it in Kite before any order.")
+        st.dataframe(pd.DataFrame({
+            "symbol": table["symbol"], "score": table["score"].round(0),
+            "trend": falling, "price": table["price"].round(2),
+            "futures": table["has_futures"].map({True: "yes", False: "no futures"}),
+            "lot (shares)": table["lot"],
+            "lot value (Rs)": table["lot_value"].round(0),
+            "move of 1% (Rs)": table["loss_per_1pct"].round(0),
+        }), hide_index=True, use_container_width=True,
+            column_config={"score": SCORE_COLUMNS["score"]})
+        with st.expander("How shorting the weakest scores did in the past"):
+            only = st.toggle("Only stocks that have futures today", value=bool(lots),
+                             key="short_futures_only")
+            result = short_history(only)
+            summary, by_year = rotation.summarise(result, load_nifty())
+            st.caption(f"{summary['period_start']} to {summary['period_end']}. Each week: short "
+                       f"up to {config.SHORT_POSITIONS} of the {config.SHORT_POOL} weakest "
+                       f"scores that are below their {config.EMA_FAST}-day EMA; buy back when "
+                       f"one closes above it, or {config.SHORT_STOP_LOSS:.0%} above the sell price.")
+            one, two, three, four = st.columns(4)
+            one.metric("Growth per year", pct(summary["annual_growth_rate"]))
+            two.metric("Worst drawdown", pct(summary["max_drawdown"]))
+            three.metric("Trades", summary["trades"],
+                         f"{pct(summary['win_rate'], signed=False)} won", delta_color="off")
+            four.metric("Charges paid", f"Rs {summary['total_charges']:,.0f}")
+            st.warning("A guide only. It assumes any amount can be shorted; real futures "
+                       "come in whole lots worth several lakh rupees. Charges are approximate.",
+                       icon="⚠️")
+            show(charts.drawdown_chart(result["equity"]))
+            show(charts.yearly_bars(by_year))
+
+
 def model_page():
     st.title("Full model")
     st.caption("Every factor the system collects, in one score from 0 to 100 per stock. "
@@ -763,10 +845,16 @@ def model_page():
                      format_func=lambda name: labels.get(name, name), horizontal=True,
                      key="model_style")
     rules = config.MODEL_STYLES[style]
-    stop = (f"sold if it closes {rules['stop_loss']:.0%} below the buy price"
-            if rules["stop_loss"] else "no stop-loss")
-    st.caption(f"{rules['positions']} stocks in equal amounts, a holding is kept while it "
-               f"stays in the top {rules['keep_rank']}, {stop}.")
+    stop = (f"or {rules['stop_loss']:.0%} below the buy price" if rules["stop_loss"]
+            else "no stop-loss")
+    if rules.get("trend_exit"):
+        st.caption(f"{rules['positions']} stocks in equal amounts, bought from the top "
+                   f"{rules['buy_rank']} scores when they are above their {config.EMA_FAST}-day "
+                   f"EMA. A holding is sold when it closes below that EMA, {stop}. A trade "
+                   "lasts as long as its trend: a week for some, a month for others.")
+    else:
+        st.caption(f"{rules['positions']} stocks in equal amounts, a holding is kept while it "
+                   f"stays in the top {rules['keep_rank']}, {stop}.")
 
     built = load_model()
     nifty = load_nifty()
@@ -780,6 +868,7 @@ def model_page():
     money = st.number_input("Money you have set aside for this model (Rs)", min_value=10_000,
                             value=int(config.CAPITAL), step=5_000, key="model_money",
                             help=f"It is split equally across {rules['positions']} stocks.")
+    ui.market_banner(plan["market_level"], plan["market_note"])
     _what_to_do(plan, trades, money)
 
     # ---- the market ----
@@ -796,12 +885,7 @@ def model_page():
     st.dataframe(_score_table(today.head(20)), hide_index=True,
                  use_container_width=True, column_config=SCORE_COLUMNS)
 
-    st.subheader(f"Weakest {config.MODEL_WEAKEST}: sell or avoid")
-    st.caption("If you hold one of these, the model says exit. Selling a share you do not "
-               "hold is only possible within the same day (intraday), or for longer through "
-               "futures or put options.")
-    st.dataframe(_score_table(today.tail(config.MODEL_WEAKEST).iloc[::-1]), hide_index=True,
-                 use_container_width=True, column_config=SCORE_COLUMNS)
+    _short_side(built, money)
 
     _my_trades(trades, plan["last_price"], sorted(load_stocks()))
 
@@ -912,5 +996,9 @@ if "update_note" in st.session_state:
     st.sidebar.info(st.session_state.pop("update_note"))
 st.sidebar.caption("Updating downloads the latest prices. Do it once a day after the "
                    "market closes. It takes a few minutes.")
+st.sidebar.divider()
+st.sidebar.subheader("Light or dark")
+st.sidebar.caption("Open the menu at the top right of the page (three dots), choose "
+                   "Settings, then pick Light or Dark under 'Choose app theme'.")
 
 PAGES[page]()

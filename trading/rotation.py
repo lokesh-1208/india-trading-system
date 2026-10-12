@@ -140,7 +140,7 @@ def _new_period(calendar, day, check):
 def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None,
              check="month", positions_wanted=None, keep_rank=None, stop_loss=None,
              trend_exit=False, buy_rank=None, max_gap=None, limit_days=None,
-             max_drop=None):
+             max_drop=None, min_room=None, max_spike=None):
     """Follow the rule day by day. Returns equity, trades, open positions and scores.
 
     scorer: optional. A function that takes a day's position in the calendar and
@@ -162,6 +162,10 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     How a new stock is bought (the signal is the close the decision was made on):
     max_gap: for example 0.02. Skip the buy when the stock opens more than this
     far above the signal close. None means buy at the open whatever it is.
+    min_room: for example 0.03. Skip a stock whose signal close is less than this far
+    above its trend line (needs prepared["room"]).
+    max_spike: for example 0.10. Skip a stock that rose more than this over the last
+    few days (needs prepared["spike"]).
     max_drop: for example 0.03. Skip the buy when the stock opens more than this
     far below the signal close. None means no lower limit.
     limit_days: for example 2. Instead of buying at the open, place a limit order
@@ -174,6 +178,8 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     keep_rank = config.ROTATION_KEEP_RANK if keep_rank is None else keep_rank
     buy_rank = keep_rank if buy_rank is None else buy_rank
     in_trend = prepared["in_trend"].to_numpy(dtype=bool) if trend_exit else None
+    room = prepared["room"].to_numpy(dtype=float) if min_room is not None else None
+    spike = prepared["spike"].to_numpy(dtype=float) if max_spike is not None else None
     capital = float(config.CAPITAL if capital is None else capital)
     calendar = prepared["calendar"]
     start = pd.Timestamp(config.ROTATION_START if start is None else start)
@@ -219,7 +225,7 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     cash = capital
     positions = {}      # symbol -> {"quantity", "entry", "entry_day", "buy_cost", "gap"}
     pending = {}        # symbol -> {"limit", "last_day"}: limit orders not filled yet
-    skipped = {"gap": 0, "drop": 0, "limit_expired": 0}
+    skipped = {"gap": 0, "drop": 0, "limit_expired": 0, "room": 0, "spike": 0}
     trades = []
     equity = [cash]
 
@@ -318,6 +324,12 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
                     if len(positions) + len(pending) >= positions_wanted:
                         break
                     if symbol in positions or symbol in pending or not tradable(symbol):
+                        continue
+                    if room is not None and not room[yesterday, column[symbol]] >= min_room:
+                        skipped["room"] += 1
+                        continue
+                    if spike is not None and spike[yesterday, column[symbol]] > max_spike:
+                        skipped["spike"] += 1
                         continue
                     signal_close = last_close[yesterday, column[symbol]]
                     gap = opens[day, column[symbol]] / signal_close - 1

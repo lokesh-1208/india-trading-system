@@ -306,8 +306,13 @@ class Model:
         self.market_ok = (self.market_score >= config.MODEL_MARKET_MIN).fillna(False)
         # A stock is "in trend" while it closes above its short trend line (20-day EMA).
         close = self.prepared["last_close"]
-        in_trend = (close > indicators.ema(close, config.EMA_FAST)).fillna(False)
+        trend_line = indicators.ema(close, config.EMA_FAST)
+        in_trend = (close > trend_line).fillna(False)
+        # Entry quality: how far above the trend line, and how much it rose in 5 days.
+        room = close / trend_line - 1
+        spike = close / close.shift(config.SPIKE_DAYS) - 1
         self.trading = {**self.prepared, "market_ok": self.market_ok, "in_trend": in_trend,
+                        "room": room, "spike": spike,
                         "cash_reason": "too few market checks passed"}
         self._cache = {}
 
@@ -436,7 +441,8 @@ class Model:
             keep_rank=_keep_rank(rules), stop_loss=rules["stop_loss"],
             trend_exit=rules.get("trend_exit", False), buy_rank=rules.get("buy_rank"),
             max_gap=rules.get("max_gap"), limit_days=rules.get("limit_days"),
-            max_drop=rules.get("max_drop"))
+            max_drop=rules.get("max_drop"), min_room=rules.get("min_room"),
+            max_spike=rules.get("max_spike"))
 
     def decision(self, held_symbols, style=None, buy_prices=None):
         """What the model says to do now, given the stocks you really hold.

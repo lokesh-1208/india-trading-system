@@ -4,6 +4,8 @@ Run:  streamlit run dashboard.py
 It reads the files that update_data.py downloaded, so run that first.
 """
 
+from html import escape
+
 import pandas as pd
 import streamlit as st
 
@@ -12,7 +14,7 @@ from trading import (charts, company, data, flows, indicators, journal, model, n
                      rotation, today, ui, update)
 from trading.screens import Screens
 
-st.set_page_config(page_title="India Trading System", layout="wide")
+st.set_page_config(page_title="Kasauti", layout="wide")
 MODE = ui.current_mode()        # light or dark, chosen in the browser's Settings menu
 ui.apply(MODE)
 charts.set_mode(MODE)
@@ -450,9 +452,57 @@ def today_page():
     last_day = prices.name
     above = rules.get("max_gap") or 0.0
 
-    st.title("Today")
-    st.caption(f"One model: every stock scored 0-100, checked every week, "
-               f"{rules['positions']} stocks held. Prices up to {last_day:%d %b %Y} close.")
+    close = built.prepared["last_close"]
+    trend = indicators.ema(close, config.EMA_FAST)
+
+    def chart(symbol):
+        if symbol not in close:
+            return ""
+        return ui.sparkline(close[symbol].iloc[-90:].tolist(), trend[symbol].iloc[-90:].tolist())
+
+    def about(symbol, rank=None, score=None):
+        parts = [built.industry.get(symbol, "")]
+        if rank is not None:
+            parts.insert(0, f"Rank {rank}, score {score:.0f}")
+        return ", ".join(part for part in parts if part)
+
+    # ---- market strip and the day's headline ----
+    strip = []
+    for label, name in [("Nifty 50", config.BENCHMARK), ("India VIX", "INDIAVIX"),
+                        ("USD/INR", "USDINR"), ("Brent", "BRENT"), ("Gold", "GOLD"),
+                        ("S&P 500", "SP500")]:
+        table = nifty if name == config.BENCHMARK else data.load_market(name)
+        if table is not None and len(table) > 1:
+            last, before = table["Close"].iloc[-1], table["Close"].iloc[-2]
+            strip.append((label, float(last), float((last / before - 1) * 100)))
+    ui.market_strip(strip)
+
+    now = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
+    due = today.results_soon(built.results, today.buy_day(now))
+    positions = journal.open_positions(trades, prices)
+    trend_lines = {symbol: float(trend[symbol].iloc[-1]) for symbol in held if symbol in trend}
+    mine = today.my_stocks(plan, positions, trend_lines)
+    sells = mine[mine["action"] == "SELL"]
+    money = st.session_state.get("model_money", int(config.CAPITAL))
+    buys = today.buy_list(plan, money, results_due=due)
+    picks = buys[buys["type"] == "Pick"]
+    backups = buys[buys["type"] == "Backup"]
+
+    to_buy = len(picks) if plan["market_ok"] else 0
+    to_sell = len(sells)
+    if to_buy and to_sell:
+        headline = f"Buy {to_buy}, sell {to_sell}"
+    elif to_buy:
+        headline = f"Buy {to_buy} stock{'s' if to_buy != 1 else ''}, nothing to sell"
+    elif to_sell:
+        headline = f"Sell {to_sell}, nothing new to buy"
+    else:
+        headline = "Nothing to do today"
+    note = (f"From the {last_day:%a %d %b} close. The model checks for new buys at the start "
+            "of each week and checks exits every day.")
+    ui.day_plan(headline, note, plan["market_level"], plan["market_note"])
+    if plan["market_level"] != "strong":
+        st.caption(plan["market_note"])
 
     left, right = st.columns([2, 3])
     with left:
@@ -462,96 +512,77 @@ def today_page():
     with right:
         show_what = st.radio("Show", ["Buy and sell", "Buy only", "Sell only"],
                              horizontal=True, key="today_show")
-    ui.market_banner(plan["market_level"], plan["market_note"])
 
-    # ---- 1. buy list ----
+    # ---- buy ----
     if show_what != "Sell only":
-        now = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
-        due = today.results_soon(built.results, today.buy_day(now))
-        buys = today.buy_list(plan, money, results_due=due)
-        picks = buys[buys["type"] == "Pick"]
-        st.subheader("1. Buy list: top 10")
+        def buy_rows(table, colour):
+            return [{
+                "symbol": row.symbol, "colour": colour,
+                "tag": None, "note": about(row.symbol, row.rank, row.score),
+                "chart": chart(row.symbol),
+                "middle": ui.ladder(row.entry * (1 - rules["stop_loss"]), row.entry,
+                                    row.buy_up_to),
+                "right_top": f"{row.shares} shares",
+                "right_bottom": f"about Rs {row.amount:,.0f}",
+            } for row in table.itertuples()]
+
         if not plan["market_ok"]:
-            ui.plan_panel("No new buys today.", [plan["cash_text"]],
-                          foot=["The list below is a watch list only."])
+            ui.rows_head("To buy")
+            ui.empty(plan["cash_text"] + " The stocks below are a watch list only.")
         elif len(picks):
-            cards = [ui.action_card(
-                "Buy", row.symbol,
-                f"Buy only if price is Rs {row.buy_up_to:,.2f} or less",
-                f"{row.shares} shares (about Rs {row.amount:,.0f}). "
-                f"Stop-loss {rules['stop_loss']:.0%} below your buy price "
-                f"(Rs {row.stop_loss:,.2f} if bought at Rs {row.entry:,.2f}).",
-                row.score) for row in picks.itertuples()]
-            ui.plan_panel(f"Buy {len(picks)} stock{'s' if len(picks) != 1 else ''}", [], cards,
-                          ["If a stock's price is higher than its limit, do not buy it. "
-                           "Buy the next Backup from the table instead."])
+            ui.rows_head("To buy", f"Buy at or below the limit. Stop-loss is "
+                                   f"{rules['stop_loss']:.0%} under the price you pay.")
+            ui.stock_rows(buy_rows(picks, ui.BLUE))
         else:
-            ui.plan_panel("Nothing new to buy.",
-                          ["All places are filled by stocks you hold."])
+            ui.rows_head("To buy")
+            ui.empty("Nothing new to buy: your holdings fill all the places.")
         if plan["market_ok"] and not plan["due_next_session"]:
-            st.caption("The model picks new stocks at the start of each week. These picks are "
-                       f"from the check on {plan['decided_on']:%d %b}; mid-week, buy only if "
-                       "the price is still inside the range.")
-        st.dataframe(pd.DataFrame({
-            "#": buys["rank"], "Stock": buys["symbol"], "Type": buys["type"],
-            "Score": buys["score"].round(0),
-            "Signal close": buys["entry"], "Buy only if price is at or below": buys["buy_up_to"],
-            "Stop-loss if bought at close": buys["stop_loss"],
-            "Shares": buys["shares"], "Amount (Rs)": buys["amount"],
-        }), hide_index=True, use_container_width=True,
-            column_config={"Score": SCORE_COLUMNS["score"]})
+            st.caption("These picks are from the weekly check on "
+                       f"{plan['decided_on']:%d %b}. Mid-week, buy only if the price is still "
+                       "inside the range.")
+
+        if len(backups):
+            ui.rows_head("Backups", "Use the next one if a pick is already above its limit")
+            ui.stock_rows(buy_rows(backups, ui.NEUTRAL))
         left_out = [f"{symbol} ({date:%a %d %b})" for symbol, date in sorted(due.items())
                     if symbol in set(plan["today"].index[:20])]
+        notes = []
         if left_out:
-            st.caption("Left out because results are due within "
-                       f"{config.RESULTS_BLOCK_DAYS} days (the price can jump either way): "
-                       + ", ".join(left_out) + ".")
-        st.caption(f"Entry range: any price up to {above:.0%} above the signal close. No lower "
-                   "limit: in the tests, stocks bought below the signal close did best. If a stock "
-                   "is down more than 3% while Nifty is flat, check its news (Company tab) first. "
-                   f"Stop-loss: {rules['stop_loss']:.0%} below the price you actually pay.")
+            notes.append("Left out because results are due within "
+                         f"{config.RESULTS_BLOCK_DAYS} days: " + ", ".join(left_out) + ".")
+        notes.append(f"The bar shows the stop-loss, the signal close (dot) and the buy limit, "
+                     f"{above:.0%} above it. There is no lower limit: in the tests, stocks bought "
+                     "below the signal close did best. The chart is the last 4 months, with the "
+                     f"{config.EMA_FAST}-day EMA dotted.")
+        st.caption(" ".join(notes))
 
-    # ---- 2. your stocks ----
+    # ---- your stocks ----
     if show_what != "Buy only":
-        st.subheader("2. Your stocks: hold or sell")
-        positions = journal.open_positions(trades, prices)
-        close = built.prepared["last_close"]
-        trend_lines = {symbol: float(indicators.ema(close[symbol], config.EMA_FAST).iloc[-1])
-                       for symbol in held if symbol in close}
-        mine = today.my_stocks(plan, positions, trend_lines)
+        ui.rows_head("Your stocks", "Hold or sell, checked on each day's close")
         if len(mine) == 0:
-            st.write("No stocks recorded. After you buy, record it below and it will appear here "
-                     "with its exit levels.")
+            ui.empty("No stocks recorded yet. After you buy, add it under 'My real trades' "
+                     "and it shows here with its exit levels.")
         else:
-            sells = mine[mine["action"] == "SELL"]
-            if len(sells):
-                ui.plan_panel(f"Sell {len(sells)} at the next open", [], [
-                    ui.action_card("Sell", row.symbol, f"all {row.quantity} shares", row.reason)
-                    for row in sells.itertuples()])
-            st.dataframe(pd.DataFrame({
-                "Stock": mine["symbol"], "Do": mine["action"], "Why": mine["reason"],
-                "Shares": mine["quantity"], "Bought at": mine["buy_price"],
-                "Price now": mine["last_price"], "Gain %": mine["gain_%"],
-                "Sell if it closes below": mine[["stop_loss", "trend_line"]].max(axis=1),
-                "Stop-loss": mine["stop_loss"],
-                f"{config.EMA_FAST}-day EMA": mine["trend_line"],
-            }), hide_index=True, use_container_width=True)
-            st.caption(f"Exit rule: sell at the next open after a close below the "
-                       f"{config.EMA_FAST}-day EMA or {rules['stop_loss']:.0%} below your buy "
-                       "price, whichever comes first. Update the data each evening to see it.")
+            ui.stock_rows([{
+                "symbol": row["symbol"], "tag": row["action"].capitalize(),
+                "colour": ui.SELL if row["action"] == "SELL" else ui.GOOD,
+                "note": f"{row['quantity']} shares bought at Rs {row['buy_price']:,.2f}",
+                "chart": chart(row["symbol"]),
+                "middle": ("<span style='font-size:0.86rem'>"
+                           + escape(row["reason"].capitalize()) + "</span>"),
+                "right_top": f"Rs {row['last_price']:,.2f}  {row['gain_%']:+.1f}%",
+                "right_bottom": "Sell on a close below Rs "
+                                f"{max(row['stop_loss'], row['trend_line']):,.2f}",
+            } for row in mine.to_dict("records")])
 
-    # ---- 3. avoid list ----
-    if show_what != "Buy only":
-        st.subheader("3. Avoid list: weakest scores")
-        st.caption("Do not buy these. If you hold one, the model would rather you were out.")
-        st.dataframe(today.avoid_list(plan), hide_index=True, use_container_width=True,
-                     column_config={"score": SCORE_COLUMNS["score"]})
+        ui.rows_head("Avoid", "The weakest scores. Do not buy; if you hold one, the model "
+                              "would rather you were out.")
+        avoid = today.avoid_list(plan)
+        ui.chips([(row.symbol, f"score {row.score:.0f}") for row in avoid.itertuples()])
 
     # ---- 4. events ----
-    st.subheader("4. Events: results and news")
-    st.warning("Ideas only. Trading on results or news has not been tested, so the model gives "
-               "no buy or sell here. 'Model view' is its normal score for the stock. "
-               "The decision is yours.", icon="📰")
+    ui.rows_head("Events: results and news", "Ideas only. Trading on news has not been "
+                 "tested, so there is no buy or sell here.")
     now = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
     ranking = plan["today"]
     in_trend = plan.get("in_trend", {})
@@ -630,7 +661,7 @@ def today_page():
 PAGES = {"Today": today_page, "Market": market_page, "Company": company_page}
 
 if load_nifty() is None or not load_stocks():
-    st.title("India Trading System")
+    st.title("Kasauti")
     st.error("No data found. In the terminal run:  python update_data.py")
     st.stop()
 

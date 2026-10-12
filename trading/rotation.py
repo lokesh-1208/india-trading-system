@@ -104,6 +104,7 @@ def prepare(stocks, nifty, membership_mask):
         "calendar": calendar,
         "symbols": list(stocks),
         "open": _wide(stocks, "Open", calendar),
+        "low": _wide(stocks, "Low", calendar),
         "close": close,
         "last_close": close.ffill(),
         "liquid": (turnover >= config.MIN_TURNOVER_CRORE) & member,
@@ -138,7 +139,8 @@ def _new_period(calendar, day, check):
 
 def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None,
              check="month", positions_wanted=None, keep_rank=None, stop_loss=None,
-             trend_exit=False, buy_rank=None):
+             trend_exit=False, buy_rank=None, max_gap=None, limit_days=None,
+             max_drop=None):
     """Follow the rule day by day. Returns equity, trades, open positions and scores.
 
     scorer: optional. A function that takes a day's position in the calendar and
@@ -156,6 +158,17 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     and only stocks above that line are bought. So a trade lasts as long as its
     trend does: a week for some, a month or more for others.
     buy_rank: new stocks are bought only from this many top ranks (default: keep_rank).
+
+    How a new stock is bought (the signal is the close the decision was made on):
+    max_gap: for example 0.02. Skip the buy when the stock opens more than this
+    far above the signal close. None means buy at the open whatever it is.
+    max_drop: for example 0.03. Skip the buy when the stock opens more than this
+    far below the signal close. None means no lower limit.
+    limit_days: for example 2. Instead of buying at the open, place a limit order
+    at the signal close, valid for this many days. It fills at the open if the
+    stock opens at or below that price, at the limit price if the day's low goes
+    below it, and is cancelled otherwise. A waiting order keeps its slot.
+    Every trade records gap_% (open on the buy day against the signal close).
     """
     positions_wanted = config.ROTATION_POSITIONS if positions_wanted is None else positions_wanted
     keep_rank = config.ROTATION_KEEP_RANK if keep_rank is None else keep_rank
@@ -173,6 +186,8 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     symbols = prepared["symbols"]
     column = {symbol: number for number, symbol in enumerate(symbols)}
     opens = prepared["open"].to_numpy(dtype=float)
+    lows = (prepared["low"].to_numpy(dtype=float) if "low" in prepared
+            else np.full_like(opens, np.nan))
     last_close = prepared["last_close"].to_numpy(dtype=float)
     liquid = prepared["liquid"].to_numpy(dtype=bool)
     market_ok = prepared["market_ok"].reindex(calendar).to_numpy(dtype=bool)
@@ -202,9 +217,35 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
         return None
 
     cash = capital
-    positions = {}      # symbol -> {"quantity", "entry", "entry_day", "buy_cost"}
+    positions = {}      # symbol -> {"quantity", "entry", "entry_day", "buy_cost", "gap"}
+    pending = {}        # symbol -> {"limit", "last_day"}: limit orders not filled yet
+    skipped = {"gap": 0, "drop": 0, "limit_expired": 0}
     trades = []
     equity = [cash]
+
+    def buy(symbol, day, price, gap, account):
+        """Buy one position at this price. Returns True when something was bought."""
+        nonlocal cash
+        budget = min(account / positions_wanted, cash / 1.002)
+        quantity = math.floor(budget / price)
+        if quantity < 1:
+            return False
+        cost = charges.buy_charges(quantity * price)
+        cash -= quantity * price + cost
+        positions[symbol] = {"quantity": quantity, "entry": price,
+                             "entry_day": day, "buy_cost": cost, "gap": gap}
+        return True
+
+    def try_limit(symbol, day, limit):
+        """Price a limit order fills at today, or None."""
+        today_open, today_low = opens[day, column[symbol]], lows[day, column[symbol]]
+        if np.isnan(today_open):
+            return None
+        if today_open <= limit:
+            return today_open * (1 + config.SLIPPAGE)
+        if not np.isnan(today_low) and today_low < limit:
+            return limit        # a resting limit order fills at its own price
+        return None
 
     def sell(symbol, day, reason):
         nonlocal cash
@@ -221,6 +262,7 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
             "exit_date": calendar[day].date(),
             "exit_price": round(price, 2),
             "reason": reason,
+            "gap_%": round(holding.get("gap", np.nan) * 100, 2),
             "charges": round(holding["buy_cost"] + cost, 2),
             "profit": round(value - cost - holding["quantity"] * holding["entry"]
                             - holding["buy_cost"], 2),
@@ -237,11 +279,26 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
             elif trend_exit and not in_trend[yesterday, column[symbol]]:
                 sell(symbol, day, "trend broke")
 
+        # Limit orders from earlier days: fill, or cancel once they expire.
+        for symbol in list(pending):
+            order = pending[symbol]
+            if not market_ok[yesterday]:
+                del pending[symbol]
+                continue
+            price = try_limit(symbol, day, order["limit"])
+            if price is not None:
+                del pending[symbol]
+                buy(symbol, day, price, order["gap"], equity[-1])
+            elif day >= order["last_day"]:
+                del pending[symbol]
+                skipped["limit_expired"] += 1
+
         if _new_period(calendar, day, check):
             scores = current_scores(yesterday)
             tradable = lambda symbol: not np.isnan(opens[day, column[symbol]])
 
             if not market_ok[yesterday]:
+                pending.clear()
                 for symbol in [s for s in positions if tradable(s)]:
                     sell(symbol, day, prepared.get("cash_reason", "Nifty below its average"))
             elif scores is not None and len(scores):
@@ -258,19 +315,31 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
                         continue
                     if trend_exit and not in_trend[yesterday, column[symbol]]:
                         continue
-                    if len(positions) >= positions_wanted:
+                    if len(positions) + len(pending) >= positions_wanted:
                         break
-                    if symbol in positions or not tradable(symbol):
+                    if symbol in positions or symbol in pending or not tradable(symbol):
                         continue
-                    entry = opens[day, column[symbol]] * (1 + config.SLIPPAGE)
-                    budget = min(account / positions_wanted, cash / 1.002)
-                    quantity = math.floor(budget / entry)
-                    if quantity < 1:
+                    signal_close = last_close[yesterday, column[symbol]]
+                    gap = opens[day, column[symbol]] / signal_close - 1
+                    if max_gap is not None and gap > max_gap:
+                        skipped["gap"] += 1
                         continue
-                    cost = charges.buy_charges(quantity * entry)
-                    cash -= quantity * entry + cost
-                    positions[symbol] = {"quantity": quantity, "entry": entry,
-                                         "entry_day": day, "buy_cost": cost}
+                    if max_drop is not None and gap < -max_drop:
+                        skipped["drop"] += 1
+                        continue
+                    if limit_days:
+                        price = try_limit(symbol, day, signal_close)
+                        if price is None:
+                            if limit_days > 1:
+                                pending[symbol] = {"limit": signal_close, "gap": gap,
+                                                   "last_day": day + limit_days - 1}
+                            else:
+                                skipped["limit_expired"] += 1
+                            continue
+                        buy(symbol, day, price, gap, account)
+                        continue
+                    buy(symbol, day, opens[day, column[symbol]] * (1 + config.SLIPPAGE),
+                        gap, account)
 
         held_value = sum(holding["quantity"] * last_close[day, column[symbol]]
                          for symbol, holding in positions.items())
@@ -288,7 +357,7 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     ], columns=["symbol", "bought_on", "buy_price", "quantity", "last_price", "value", "gain_%"])
 
     trade_columns = ["symbol", "entry_date", "entry_price", "quantity", "exit_date",
-                     "exit_price", "reason", "charges", "profit"]
+                     "exit_price", "reason", "gap_%", "charges", "profit"]
     return {
         "capital": capital,
         "equity": pd.Series(equity, index=calendar[first:last + 1], name="equity"),
@@ -298,6 +367,7 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
         "scores": current_scores(last),
         "scoring_day": used_day[0],
         "market_ok": bool(market_ok[last]),
+        "skipped": skipped,
     }
 
 

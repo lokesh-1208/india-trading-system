@@ -25,7 +25,7 @@ pip install -r requirements.txt
 | 1 | `python update_data.py` | Downloads the index membership history, prices for about 800 stocks, Nifty, India VIX, global markets, company announcements, FII/DII figures, bulk and block deals, and (weekly) company results and shareholding into `data/`. Takes a few minutes. |
 | 2 | `python run_backtest.py` | Tests the rules from 2015 to today and compares the result with Nifty buy-and-hold. |
 | 3 | `python daily_report.py` | Prints the market dashboard and the shortlist from the last close. |
-| Dashboard | `streamlit run dashboard.py` | Opens the dashboard in your browser: market, shortlist, company and backtest pages with charts. Its "Update data now" button does the same job as `update_data.py`. |
+| Dashboard | `streamlit run dashboard.py` | Opens the dashboard in your browser. The **Today** page is the one place to act from: the top 10 buys with a buy range and stop-loss, hold or sell for each stock you hold, and the stocks to avoid. Market and Company pages are for background. Its "Update data now" button does the same job as `update_data.py`. |
 | Card | `python stock_card.py TCS` | Shows everything known about one company: price range, valuation, growth, profitability, debt, dividend, shareholding pattern and a ten-point scorecard. |
 | Tests | `python -m pytest` | Runs the automated checks on the calculations. GitHub also runs them on every pull request. |
 
@@ -138,6 +138,10 @@ into `data/universe/`. It is not stored in this repository.
 
 ## Results so far
 
+- **The model on the Today page (full model, weekly swing, with the 2% buy range):**
+  from February 2022 to October 2026 about 19% a year, worst drawdown about 21%,
+  against about 5% and 16% for Nifty. Not proven for real money. Details in the
+  "How this model did in the past" section of the page.
 - **Swing rules (the Shortlist and Backtest pages):** lost money from 2015 to 2026
   after charges. Not for real money.
 - **Ownership rotation (rule set D):** from February 2022 to October 2026 it grew about

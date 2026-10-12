@@ -163,8 +163,10 @@ MODEL_NEWS_DAYS = 30
 MODEL_STYLES = {
     # Swing follows each stock's own trend: bought from the top 10 at the weekly
     # check, held while it closes above its 20-day EMA, sold when it does not.
+    # max_gap: a buy is skipped if the stock opens more than 2% above the signal
+    # close (backtest log, entry 7). No lower limit: buying below it did well.
     "swing": {"check": "week", "positions": 5, "keep_rank": 10, "buy_rank": 10,
-              "rank_exit": False, "stop_loss": 0.08, "trend_exit": True},
+              "rank_exit": False, "stop_loss": 0.08, "trend_exit": True, "max_gap": 0.02},
     "monthly": {"check": "month", "positions": 10, "keep_rank": 20, "buy_rank": 20,
                 "rank_exit": True, "stop_loss": None, "trend_exit": False},
 }

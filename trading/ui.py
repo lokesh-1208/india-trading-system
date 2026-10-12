@@ -8,6 +8,8 @@ checks passed or failed).
 
 from html import escape
 
+import pandas as pd
+
 import streamlit as st
 
 # The same in both modes: buy, sell, good, bad.
@@ -104,6 +106,20 @@ section[data-testid="stSidebar"] {{ background: {SIDEBAR}; border-right: 1px sol
 .act-symbol {{ color: {BRIGHT}; font-size: 1.08rem; font-weight: 700; margin: 2px 0; }}
 .act-line {{ color: {TEXT}; font-size: 0.88rem; font-variant-numeric: tabular-nums; }}
 .act-why {{ color: {MUTED}; font-size: 0.8rem; margin-top: 3px; }}
+
+/* event cards */
+.evs {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+        gap: 10px; margin: 6px 0 4px; }}
+.ev-view {{ color: var(--c); font-size: 0.8rem; font-weight: 600; }}
+.ev-hold {{ background: {BLUE}; color: #fff; font-size: 0.7rem; font-weight: 700;
+            border-radius: 3px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; }}
+.ev {{ border-top: 1px solid {LINE}; margin-top: 7px; padding-top: 6px; font-size: 0.85rem;
+       color: {TEXT}; }}
+.ev-kind {{ font-weight: 700; color: {BRIGHT}; }}
+.ev-when {{ color: {MUTED}; font-size: 0.78rem; margin-left: 6px; }}
+.ev-up {{ color: {GOOD}; font-weight: 700; }}
+.ev-down {{ color: {BAD}; font-weight: 700; }}
+.ev a {{ color: {BLUE}; text-decoration: none; font-size: 0.78rem; margin-left: 4px; }}
 
 /* yes / no checks */
 .checks {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
@@ -202,3 +218,53 @@ def market_banner(level, note):
          f'padding:11px 16px"><span style="color:{colour};font-weight:700">'
          f'{level.capitalize()}</span><span class="plan-note" style="margin-left:12px">'
          f'{escape(note.split(": ", 1)[-1])}</span></div>')
+
+
+VIEW_COLOURS = {"strong": GOOD, "neutral": NEUTRAL, "below": "#e3a008", "weak": BAD}
+
+
+def _event_line(event):
+    """One event inside an event card."""
+    kind = event["kind"]
+    when = event["when"]
+    if kind == "Results due":
+        icon, label, stamp = "📅", "Results due", f"{when:%a %d %b}"
+    elif kind == "Results out":
+        icon, label, stamp = "📊", "Results out", f"{when:%a %d %b}"
+    else:
+        icon, label, stamp = "📰", kind, f"{when:%d %b %H:%M}"
+    move = event.get("move")
+    if move is None or pd.isna(move):
+        moved = ""
+    else:
+        cls = "ev-up" if move >= 0 else "ev-down"
+        moved = f' · <span class="{cls}">{move:+.1f}% since</span>'
+    text = f'<div>{escape(event["text"])}</div>' if event.get("text") else ""
+    link = (f'<a href="{escape(event["link"])}" target="_blank">filing ↗</a>'
+            if event.get("link") else "")
+    return (f'<div class="ev">{icon} <span class="ev-kind">{escape(label)}</span>'
+            f'<span class="ev-when">{stamp}</span>{moved}{link}{text}</div>')
+
+
+def event_cards(entries):
+    """Cards for the Events section: one per stock, coloured by the model's view."""
+    cards = []
+    for entry in entries:
+        view = entry["view"]
+        colour = VIEW_COLOURS.get(view.split(":")[0].split(" ")[0], NEUTRAL)
+        rank = entry.get("rank")
+        facts = []
+        if rank is not None and not pd.isna(rank):
+            facts.append(f"rank {int(rank)}")
+        if entry.get("score") is not None and not pd.isna(entry["score"]):
+            facts.append(f"score {entry['score']:.0f}")
+        if entry.get("price") is not None and not pd.isna(entry["price"]):
+            facts.append(f"Rs {entry['price']:,.2f}")
+        hold = '<span class="ev-hold">YOU HOLD</span>' if entry.get("held") else ""
+        lines = "".join(_event_line(event) for event in entry["events"])
+        cards.append(
+            f'<div class="act" style="--c:{colour}">'
+            f'<div class="ev-view">{escape(view)}</div>'
+            f'<div class="act-symbol">{escape(entry["symbol"])}{hold}</div>'
+            f'<div class="act-score">{escape(" · ".join(facts))}</div>{lines}</div>')
+    html(f'<div class="evs">{"".join(cards)}</div>')

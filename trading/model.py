@@ -422,17 +422,21 @@ class Model:
         return self._cache[position]
 
     # ---- using the score ----
-    def simulate(self, start=None, end=None, capital=None, style=None):
+    def simulate(self, start=None, end=None, capital=None, style=None, **entry):
         """Follow the model through the past (see rotation.simulate).
 
         style: "swing" or "monthly" (see MODEL_STYLES in config.py).
+        entry: optional max_gap / limit_days to override how new stocks are bought
+        (see rotation.simulate).
         """
-        rules = config.MODEL_STYLES[style or config.MODEL_STYLE]
+        rules = {**config.MODEL_STYLES[style or config.MODEL_STYLE], **entry}
         return rotation.simulate(
             self.trading, None, start, end, capital, scorer=self.score_on,
             check=rules["check"], positions_wanted=rules["positions"],
             keep_rank=_keep_rank(rules), stop_loss=rules["stop_loss"],
-            trend_exit=rules.get("trend_exit", False), buy_rank=rules.get("buy_rank"))
+            trend_exit=rules.get("trend_exit", False), buy_rank=rules.get("buy_rank"),
+            max_gap=rules.get("max_gap"), limit_days=rules.get("limit_days"),
+            max_drop=rules.get("max_drop"))
 
     def decision(self, held_symbols, style=None, buy_prices=None):
         """What the model says to do now, given the stocks you really hold.
@@ -450,8 +454,9 @@ class Model:
         plan["trend_exit"] = bool(rules.get("trend_exit"))
         plan["stopped"] = []
         plan["trend_broken"] = []
+        plan["in_trend"] = self.trading["in_trend"].iloc[-1]
         if rules.get("trend_exit") and plan["market_ok"]:
-            in_trend = self.trading["in_trend"].iloc[-1]
+            in_trend = plan["in_trend"]
             plan["trend_broken"] = [s for s in plan["keep"] if not bool(in_trend.get(s, True))]
             plan["sell"] = plan["sell"] + plan["trend_broken"]
             plan["keep"] = [s for s in plan["keep"] if s not in plan["trend_broken"]]

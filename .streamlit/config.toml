@@ -9,9 +9,12 @@ textColor = "#d5d8dd"
 
 [theme.light]
 primaryColor = "#387ed1"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f6f7f9"
-textColor = "#3b4048"
+backgroundColor = "#f3f5f8"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#2f363e"
 
 [browser]
 gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

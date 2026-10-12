@@ -89,3 +89,17 @@ def test_an_open_too_far_below_the_signal_is_skipped():
 def test_an_open_slightly_below_the_signal_is_bought():
     result = _run(_prepared(monday_low=97.0, monday_open=98.0), max_drop=0.03)
     assert len(result["positions"]) == 1
+
+
+def test_a_stock_too_close_to_its_trend_line_can_be_skipped():
+    prepared = _prepared(monday_low=99.5)
+    prepared["room"] = pd.DataFrame({"AAA": [0.01] * 6}, index=CALENDAR)
+    result = _run(prepared, min_room=0.03)
+    assert result["positions"].empty and result["skipped"]["room"] == 1
+
+
+def test_a_stock_after_a_spike_can_be_skipped():
+    prepared = _prepared(monday_low=99.5)
+    prepared["spike"] = pd.DataFrame({"AAA": [0.15] * 6}, index=CALENDAR)
+    result = _run(prepared, max_spike=0.10)
+    assert result["positions"].empty and result["skipped"]["spike"] == 1

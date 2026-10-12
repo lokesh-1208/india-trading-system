@@ -171,6 +171,7 @@ MODEL_STYLES = {
                 "rank_exit": True, "stop_loss": None, "trend_exit": False},
 }
 MODEL_STYLE = "swing"
+SPIKE_DAYS = 5                 # "recent spike" = rise over this many trading days
 MODEL_STRONG_MARKET = 0.75     # at or above this share of checks, with Nifty above its
                                # 200-day average, the market is called strong
 MODEL_WEAKEST = 10             # how many of the lowest scores to list as sell / avoid

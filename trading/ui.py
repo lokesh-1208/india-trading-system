@@ -49,9 +49,12 @@ def _css(BACKGROUND, PANEL, BORDER, TEXT, BRIGHT, MUTED, SIDEBAR, LINE):
 [data-testid="stMetricValue"], [data-testid="stMetricLabel"], [data-testid="stCaptionContainer"] {{
     font-family: 'IBM Plex Sans', 'Segoe UI', Roboto, sans-serif;
 }}
-.block-container {{ padding-top: 1.1rem; padding-bottom: 3rem; max-width: 1240px; }}
+.block-container {{ padding-top: 2.4rem; padding-bottom: 4rem; max-width: 1240px; }}
 .stApp {{ font-variant-numeric: tabular-nums; }}
-header[data-testid="stHeader"] {{ background: transparent; }}
+header[data-testid="stHeader"] {{ background: transparent; pointer-events: none; }}
+[data-testid="stToolbar"] {{ pointer-events: none; }}
+[data-testid="stToolbar"] button, [data-testid="stToolbar"] a,
+[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapseButton"] {{ pointer-events: auto; }}
 .stApp h1 {{ font-size: 1.45rem; font-weight: 700; color: {BRIGHT}; padding: 0.2rem 0 0.1rem; }}
 .stApp h2 {{ font-size: 1.15rem; font-weight: 700; color: {BRIGHT}; }}
 .stApp h3 {{ font-size: 1.08rem; font-weight: 600; color: {BRIGHT}; padding-top: 1.4rem; }}
@@ -62,7 +65,7 @@ header[data-testid="stHeader"] {{ background: transparent; }}
     background: {PANEL}; border: 1px solid {BORDER}; border-radius: 10px; padding: 12px 14px;
 }}
 [data-testid="stMetricLabel"] {{ color: {MUTED}; }}
-[data-testid="stMetricValue"] {{ font-size: 1.35rem; color: {BRIGHT}; font-variant-numeric: tabular-nums; }}
+[data-testid="stMetricValue"] {{ font-size: 1.25rem; color: {BRIGHT}; font-variant-numeric: tabular-nums; }}
 
 /* side panel, folds, tables, forms */
 section[data-testid="stSidebar"] {{ background: {SIDEBAR}; border-right: 1px solid {BORDER}; }}
@@ -72,22 +75,62 @@ section[data-testid="stSidebar"] {{ background: {SIDEBAR}; border-right: 1px sol
 [data-testid="stVerticalBlockBorderWrapper"] {{ border-color: {BORDER}; }}
 .stButton button, .stFormSubmitButton button {{ border-radius: 4px; }}
 
-/* choices in a row look like Kite's tabs: no circle, a blue underline on the chosen one */
-.stRadio div[role="radiogroup"] {{ gap: 0; border-bottom: 1px solid {BORDER}; flex-wrap: nowrap; }}
-.stRadio div[role="radiogroup"] label p {{ white-space: nowrap; }}
-.stRadio div[role="radiogroup"] label {{
+/* choices in a row in the main area look like tabs: no circle, a blue underline */
+[data-testid="stMain"] .stRadio div[role="radiogroup"] {{ gap: 0; border-bottom: 1px solid {BORDER};
+    flex-wrap: nowrap; }}
+[data-testid="stMain"] .stRadio div[role="radiogroup"] label p {{ white-space: nowrap; }}
+[data-testid="stMain"] .stRadio div[role="radiogroup"] label {{
     padding: 7px 16px 8px; margin: 0 0 -1px 0; border-bottom: 2px solid transparent;
     color: {MUTED}; cursor: pointer;
 }}
 .stRadio div[role="radiogroup"] label > div > div:not([data-testid="stMarkdownContainer"]) {{ display: none; }}
-.stRadio div[role="radiogroup"] label:hover {{ color: {TEXT}; }}
-.stRadio div[role="radiogroup"] label[data-selected="true"],
-.stRadio div[role="radiogroup"] label:has(input:checked) {{ border-bottom-color: {BLUE}; }}
-.stRadio div[role="radiogroup"] label[data-selected="true"] p,
-.stRadio div[role="radiogroup"] label:has(input:checked) p {{ color: {BLUE}; font-weight: 700; }}
+[data-testid="stMain"] .stRadio div[role="radiogroup"] label:hover {{ color: {TEXT}; }}
+[data-testid="stMain"] .stRadio div[role="radiogroup"] label:has(input:checked) {{ border-bottom-color: {BLUE}; }}
+[data-testid="stMain"] .stRadio div[role="radiogroup"] label:has(input:checked) p {{ color: {BLUE}; font-weight: 600; }}
+
+/* the page tabs at the top: larger */
+.st-key-page div[role="radiogroup"] {{ border-bottom: none !important; justify-content: flex-end; gap: 4px !important; }}
+.st-key-page div[role="radiogroup"] label {{ padding: 10px 20px 11px !important; border-bottom-width: 3px !important; }}
+.st-key-page div[role="radiogroup"] label p {{ font-size: 1.08rem !important; font-weight: 500; }}
+
+/* the left panel */
+section[data-testid="stSidebar"] .block-container, section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding-top: 1.2rem; }}
+.side-h {{ color: {BRIGHT}; font-weight: 600; font-size: 0.98rem; margin: 18px 0 8px; }}
+.side-h:first-child {{ margin-top: 0; }}
+.data-ok {{ display: flex; gap: 10px; align-items: flex-start; background: {BACKGROUND};
+            border: 1px solid {BORDER}; border-radius: 10px; padding: 10px 12px; margin-bottom: 10px;
+            font-size: 0.86rem; color: {TEXT}; line-height: 1.4; }}
+.data-ok i {{ flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--c);
+              margin-top: 5px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 22%, transparent); }}
+.data-ok b {{ display: block; color: {BRIGHT}; font-weight: 600; }}
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] {{ gap: 6px; flex-direction: column;
+    align-items: stretch; }}
+.st-key-today_show_choice, .st-key-today_show_choice .stRadio,
+.st-key-today_show_choice [role="radiogroup"], .st-key-today_show_choice [role="radiogroup"] > div {{
+    width: 100% !important; }}
+[data-testid="stSidebarHeader"] {{ height: 2.4rem; min-height: 0; padding-top: 0.6rem; padding-bottom: 0; }}
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {{
+    border: 1px solid {BORDER}; border-radius: 8px; padding: 7px 12px; margin: 0; width: 100%;
+    background: {BACKGROUND}; cursor: pointer; }}
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:has(input:checked) {{
+    border-color: {BLUE}; background: color-mix(in srgb, {BLUE} 10%, {PANEL}); }}
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:has(input:checked) p {{
+    color: {BLUE}; font-weight: 600; }}
+
+/* sections that open and close */
+[data-testid="stMain"] [data-testid="stExpander"] {{ margin-bottom: 12px; }}
+[data-testid="stMain"] [data-testid="stExpander"] details {{ background: {PANEL}; border: 1px solid {BORDER};
+    border-radius: 12px; }}
+[data-testid="stMain"] [data-testid="stExpander"] summary {{ padding: 14px 18px; }}
+[data-testid="stMain"] [data-testid="stExpander"] summary p {{ font-size: 1.06rem; font-weight: 600;
+    color: {BRIGHT}; }}
+[data-testid="stMain"] [data-testid="stExpander"] summary:hover p {{ color: {BLUE}; }}
+[data-testid="stMain"] [data-testid="stExpanderDetails"] {{ padding: 0 18px 16px; }}
+[data-testid="stExpander"] .rows {{ border-radius: 10px; }}
+.sec-note {{ color: {MUTED}; font-size: 0.86rem; margin: -2px 0 10px; }}
 
 /* top bar */
-.brand {{ font-size: 1.6rem; font-weight: 700; color: {BRIGHT}; padding-top: 0; white-space: nowrap;
+.brand {{ font-size: 1.75rem; font-weight: 700; color: {BRIGHT}; padding-top: 0; white-space: nowrap;
           letter-spacing: -0.01em; line-height: 1.2; }}
 .brand i {{ display: inline-block; width: 12px; height: 12px; background: {BLUE}; vertical-align: 3px;
            transform: rotate(45deg); margin-right: 10px; }}
@@ -174,6 +217,15 @@ section[data-testid="stSidebar"] {{ background: {SIDEBAR}; border-right: 1px sol
   .row {{ grid-template-columns: 40px 1fr 110px; }}
   .ladder, .order {{ grid-column: 1 / -1; text-align: left; }}
 }}
+
+/* company header */
+.co {{ display: flex; justify-content: space-between; align-items: flex-end; gap: 16px;
+       flex-wrap: wrap; margin: 6px 0 14px; }}
+.co h2 {{ font-size: 1.9rem !important; font-weight: 600 !important; margin: 0; padding: 0 !important; }}
+.co p {{ color: {MUTED}; margin: 4px 0 0; font-size: 0.9rem; }}
+.co-price {{ text-align: right; }}
+.co-price b {{ display: block; font-size: 1.6rem; font-weight: 600; color: {BRIGHT}; }}
+.co-tags {{ display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }}
 
 /* yes / no checks */
 .checks {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
@@ -426,3 +478,33 @@ def chips(items):
     html('<div class="chips">' + "".join(
         f'<span class="chip"><b>{escape(bold)}</b>{escape(rest)}</span>' for bold, rest in items)
         + "</div>")
+
+
+def side_heading(text):
+    st.sidebar.markdown(f'<div class="side-h">{escape(text)}</div>', unsafe_allow_html=True)
+
+
+def data_status(ok, text):
+    """A small status card in the left panel: green dot when the prices are current."""
+    colour = GOOD if ok else "#d9930d"
+    head, _, rest = text.partition(": ")
+    rest = rest[:1].upper() + rest[1:]
+    st.sidebar.markdown(f'<div class="data-ok" style="--c:{colour}"><i></i><div><b>{escape(head)}</b>'
+                        f'{escape(rest)}</div></div>', unsafe_allow_html=True)
+
+
+def section_note(text):
+    html(f'<div class="sec-note">{escape(text)}</div>')
+
+
+def company_header(symbol, facts, price, change, view, rank, total):
+    """Name, price and the model's view at the top of the Company page."""
+    colour = VIEW_COLOURS.get(view.split(":")[0].split(" ")[0], NEUTRAL)
+    cls = "up" if change >= 0 else "down"
+    rank_tag = (f'<span class="mood" style="--c:{BLUE}">Rank {rank} of {total}</span>'
+                if rank else "")
+    html(f'<div class="co"><div><h2>{escape(symbol)}</h2><p>{escape(facts)}</p></div>'
+         f'<div class="co-price"><b>Rs {price:,.2f} <span class="{cls}" style="font-size:1rem">'
+         f'{change:+.2f}%</span></b><div class="co-tags">'
+         f'<span class="mood" style="--c:{colour}">{escape(view.capitalize())}</span>{rank_tag}'
+         f'</div></div></div>')

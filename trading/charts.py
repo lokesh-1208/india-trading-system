@@ -84,15 +84,15 @@ def volume_chart(table, title="Shares traded each day"):
 
 
 def rsi_chart(table):
-    """RSI with the band the rules look for."""
+    """RSI with the usual 30 and 70 lines."""
     figure = go.Figure(_line(table.index, table["rsi"], "RSI", BLUE, ".1f"))
-    for level in (config.RSI_MIN, config.RSI_MAX):
+    for level in (30, 70):
         figure.add_hline(y=level, line={"color": MUTED, "width": 1},
                          annotation_text=str(level), annotation_position="right",
                          annotation_font={"color": MUTED})
     figure.update_yaxes(range=[0, 100])
-    figure = _style(figure, f"RSI ({config.RSI_PERIOD} days): the rules want it between "
-                            f"{config.RSI_MIN} and {config.RSI_MAX}", height=220, legend=False)
+    figure = _style(figure, f"RSI ({config.RSI_PERIOD} days): above 70 is stretched, below 30 "
+                            "is oversold", height=220, legend=False)
     return figure.update_layout(margin={"r": 36})
 
 

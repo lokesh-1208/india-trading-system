@@ -430,3 +430,74 @@ def ideas(read_table, ranking, in_trend, closes, trend_line, held=(), weekly=(),
         return table.drop(columns=["_a", "_l"]).reset_index(drop=True)
 
     return order(buys, True), order(exits, False)
+
+
+# ------------------------------------------------------------- the test -----
+# Result of research/news_ideas_test.py, run on 13 Oct 2026 over the year of saved
+# announcements (20 Oct 2025 to 13 Oct 2026), with the model's exits and real charges.
+IDEA_TEST_NOTE = (
+    "Tested on one year (Oct 2025 to Oct 2026): buying these ideas lost 9.6% after charges "
+    "(Nifty fell 12.1%), and only 23% of the trades made money. The weekly list made 55% in "
+    "the same year. Selling a holding on bad news made no difference. So news ideas help you "
+    "understand a move; they are not a reason to buy on their own.")
+
+def idea_scorer(built, read_table, require_model=True):
+    """A scorer for rotation.simulate that ranks only the news buy ideas of each day.
+
+    The news is read with the fixed rules only (not with the history-based
+    lean, which would use the future). An idea on a day: good news in the
+    last config.NEWS_IDEA_DAYS days, up to that day's evening; the price not
+    already up more than config.NEWS_MAX_RUN_PCT since; and, with
+    require_model, a model score of 60 or more with the price above its
+    20-day average.
+    """
+    calendar = built.calendar
+    closes = built.prepared["last_close"]
+    in_trend = built.trading["in_trend"]
+    reading = read_table[read_table["lean"] != 0].copy()
+    reading["time"] = pd.to_datetime(reading["time"])
+
+    def scorer(position):
+        day = calendar[position]
+        since = day - pd.Timedelta(days=config.NEWS_IDEA_DAYS)
+        recent = reading[(reading["time"] > since) & (reading["time"] < day + pd.Timedelta(days=1))]
+        ranking = built.score_on(position)
+        rows = []
+        for symbol, group in recent.groupby("symbol"):
+            net = int(group["lean"].sum())
+            if net <= 0 or symbol not in ranking.index:
+                continue
+            score = float(ranking.loc[symbol, "score"])
+            trend_ok = bool(in_trend.iloc[position].get(symbol, False))
+            if require_model and not (score >= 60 and trend_ok):
+                continue
+            series = closes[symbol].iloc[:position + 1].dropna()
+            first = group["time"].min()
+            start = base_day(first, series.index)
+            if start is not None and series.iloc[-1] / series.loc[start] - 1 \
+                    > config.NEWS_MAX_RUN_PCT / 100:
+                continue
+            rows.append({"symbol": symbol, "score": score, "lean": net,
+                         "no_new_buy": bool(ranking.loc[symbol].get("no_new_buy", False))})
+        table = pd.DataFrame(rows, columns=["symbol", "score", "lean", "no_new_buy"])
+        return table.sort_values(["lean", "score"], ascending=False).set_index("symbol")
+
+    return scorer
+
+
+def backtest_ideas(built, read_table, start, require_model=True, capital=None):
+    """Trade the news buy ideas with the model's own exits and charges.
+
+    Checked every day; up to the model's number of positions; bought at the
+    next open (skipped if it opens more than the model's gap above the
+    signal close); sold the day after a close below the 20-day average or
+    at the stop-loss. Returns rotation.simulate's result.
+    """
+    from trading import rotation
+    rules = config.MODEL_STYLES[config.MODEL_STYLE]
+    return rotation.simulate(
+        built.trading, None, start=start, capital=capital,
+        scorer=idea_scorer(built, read_table, require_model), check="day",
+        positions_wanted=rules["positions"], keep_rank=10 ** 9 + 1,
+        stop_loss=rules["stop_loss"], trend_exit=True, buy_rank=rules["positions"] * 4,
+        max_gap=rules.get("max_gap"))

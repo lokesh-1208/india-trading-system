@@ -734,11 +734,12 @@ def before_open_section(ranking, in_trend, held, weekly_symbols):
     title = (f"Before the open: {guess}. {int((likely['direction'] > 0).sum())} likely up, "
              f"{int((likely['direction'] < 0).sum())} likely down"
              + (f", {len(warnings)} of your stocks affected" if len(warnings) else "")
-             + " (not part of the model)")
+             + " · for context")
     with st.expander(title, expanded=morning):
         ui.section_note(f"Everything since the close on {since:%a %d %b, %I:%M %p}: global "
-                        "markets, company filings with NSE and NSE's pre-open prices. For "
-                        "understanding the open only: not tested, not a buy or sell signal.")
+                        "markets, company filings with NSE and NSE's pre-open prices. It "
+                        "helps you understand the open; the buy and sell calls above come "
+                        "from the model.")
         if st.button("Refresh before-open data", key="premarket_refresh",
                      help="Global markets, overnight announcements and NSE pre-open prices. "
                           "Under a minute. Runs by itself at 9:10 am on weekdays."):
@@ -807,12 +808,10 @@ def news_ideas_section(ranking, in_trend, close, trend, held, weekly_symbols):
     buys, exits = newsview.ideas(reading, ranking, in_trend, close, trend.iloc[-1],
                                  held=held, weekly=weekly_symbols, reactions=reactions)
     title = (f"News ideas: {len(buys)} possible buys, {len(exits)} possible exits "
-             "(not tested)")
+             "· for context")
     with st.expander(title):
         ui.section_note("Company news of the last few days, read as good or bad, next to the "
-                        "model's view and the price since. Ideas only: the model's tested "
-                        "rules do not trade on news. Use them to understand a move, or if you "
-                        "decide to act on news yourself.")
+                        "model's view and the price since. " + newsview.IDEA_TEST_NOTE)
         buy_tab, exit_tab, past_tab = st.tabs([f"Possible buys ({len(buys)})",
                                                f"Possible exits ({len(exits)})",
                                                "What usually happens after news"])
@@ -863,14 +862,13 @@ def movers_section():
     day, sides, reading = found
     title = (f"Market movers, {day:%a %d %b}: {reading['label']}. "
              f"{len(sides['up'])} heavy buying, {len(sides['down'])} heavy selling "
-             "(not part of the model)")
+             "· for context")
     with st.expander(title):
         ui.section_note("Where the crowd's money went: Nifty 500 stocks that moved at least "
                         f"{config.MOVERS_MIN_MOVE_PCT:.0f}% on at least "
                         f"{config.MOVERS_MIN_VOLUME_X:.0f}x their normal volume. For "
-                        "understanding how the market is behaving only: these are not tested "
-                        "and are not buy or sell signals. Big moves often reverse in the "
-                        "following days.")
+                        "understanding how the market is behaving. Big moves often reverse "
+                        "in the following days.")
         st.markdown(f"**Mood: {reading['label']}.** {reading['text']}")
         up_tab, down_tab = st.tabs([f"Heavy buying ({len(sides['up'])})",
                                     f"Heavy selling ({len(sides['down'])})"])
@@ -1066,7 +1064,7 @@ def today_page():
 
         # ---- watch: other names on today's list ----
         if len(watch) and not weekly_day:
-            with st.expander(f"Watch: {len(watch)} other names on today's list (not tested)"):
+            with st.expander(f"Watch: {len(watch)} other names on today's list · for watching"):
                 ui.section_note(f"On today's top {len(todays)} from the {last_day:%a %d %b} close "
                                 "but not on this week's list. In the tests, buying new picks "
                                 "every day did worse than buying weekly (about +12% a year "

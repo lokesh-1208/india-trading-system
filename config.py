@@ -34,6 +34,18 @@ MEMBERSHIP_SOURCE = (
     "https://raw.githubusercontent.com/rishabhjain0295-web/"
     "nifty500-momentum-backtest/master/data/"
 )
+# A stock on NSE's current Nifty 500 list that the history file leaves out is
+# counted as a member from this many days ago (its older history is unknown).
+MISSING_MEMBER_START_DAYS = 365
+
+# The full price history is downloaded from Yahoo once a week. On other days
+# only the new days are added from NSE's day file, which is much faster.
+FULL_PRICES_REFRESH_DAYS = 7
+FULL_PRICES_MARKER = DATA_DIR / "prices_full_download.txt"   # date of the last full download
+YAHOO_NO_DATA_FILE = DATA_DIR / "yahoo_no_data.txt"   # delisted stocks; retried weekly only
+# NSE's previous close differing from the saved close by more than this means a
+# split, bonus or big dividend: that stock's full history is downloaded again.
+CORPORATE_ACTION_GAP = 0.01
 
 # Name we use -> Yahoo Finance ticker
 MARKET_SYMBOLS = {
@@ -93,7 +105,12 @@ ANNUAL_FILE = FUNDAMENTALS_DIR / "annual.csv"          # yearly results per comp
 QUARTERLY_FILE = FUNDAMENTALS_DIR / "quarterly.csv"    # quarterly results
 RESULTS_DATES_FILE = FUNDAMENTALS_DIR / "results_dates.csv"
 DIVIDENDS_FILE = FUNDAMENTALS_DIR / "dividends.csv"
-FUNDAMENTALS_REFRESH_DAYS = 7    # company numbers change slowly; refresh weekly
+FUNDAMENTALS_REFRESH_DAYS = 7    # shareholding filings are checked once a week
+RESULTS_FETCHED_FILE = FUNDAMENTALS_DIR / "results_fetched.csv"   # when each company was fetched
+# Company results are downloaded only for companies that are due (see
+# fundamentals.due_symbols): just announced results, or not checked for a month.
+RESULTS_WATCH_DAYS = 21          # keep checking this long after a results announcement
+RESULTS_FULL_REFRESH_DAYS = 30   # every company is checked again at least this often
 
 # A year's results become public some weeks after the year ends. In a backtest
 # we only use them from this many days after the year end, never earlier.

@@ -2,10 +2,13 @@
 figures, large deals, company results and shareholding.
 
 Run:  python update_data.py
-      python update_data.py --fundamentals     (force a refresh of company results
-                                                and shareholding)
-Prices take a few minutes. Run it once a day after the market closes.
-Company results and shareholding change slowly, so they refresh once a week.
+      python update_data.py --full-prices      (download the full price history
+                                                from Yahoo now, not just new days)
+      python update_data.py --fundamentals     (company results for every company,
+                                                and shareholding, right now)
+Run it once a day after the market closes; it usually takes 1-2 minutes.
+The full price history is downloaded once a week by itself (about 6 minutes).
+Company results are downloaded only for companies that just reported.
 The dashboard's "Update data now" button does the same thing.
 """
 
@@ -14,28 +17,27 @@ import argparse
 from trading import update
 
 parser = argparse.ArgumentParser(description="Download all data.")
+parser.add_argument("--full-prices", action="store_true",
+                    help="download the full price history from Yahoo even if it is recent")
 parser.add_argument("--fundamentals", action="store_true",
-                    help="refresh company results and shareholding even if they are recent")
+                    help="download every company's results and shareholding now")
 arguments = parser.parse_args()
 
-summary = update.run_update(include_company_data=True if arguments.fundamentals else None)
+summary = update.run_update(include_company_data=True if arguments.fundamentals else None,
+                            full_prices=True if arguments.full_prices else None)
 
 print()
 if summary["failed_markets"]:
     print(f"PROBLEM: no data for these markets: {', '.join(summary['failed_markets'])}")
+print(update.describe_prices(summary["prices"]))
 print(f"Stocks without data on Yahoo: {summary['stocks_without_data']}")
 print("These are mostly companies that were delisted, merged or renamed.")
-gap = summary["missing_days"]
-if summary["missing_days_problem"]:
-    print(f"Could not fill days missing on Yahoo: {summary['missing_days_problem']}")
-elif gap["days"]:
-    days = ", ".join(f"{day:%d %b}" for day in gap["days"])
-    print(f"Days missing on Yahoo: {days}. Filled {gap['from_nse']} stock-days from NSE, "
-          f"{gap['from_hourly']} from Yahoo hourly bars; {gap['not_filled']} could not be filled.")
-if summary["company_data_refreshed"]:
-    print("Company results and shareholding refreshed.")
-else:
-    print(f"Company results are {update.company_data_age_days():.0f} days old; not refreshed.")
+print(f"Company results downloaded for {summary['results_companies']} companies "
+      "(those that just reported, or not checked for a month).")
+if summary["results_problem"]:
+    print(f"Could not finish the company results download: {summary['results_problem']}")
+if summary["shareholding_refreshed"]:
+    print("Shareholding filings refreshed.")
 if summary["shareholding_problem"]:
     print(f"Could not finish the shareholding download: {summary['shareholding_problem']}")
 if summary["news_problem"]:
@@ -44,4 +46,4 @@ else:
     print(f"New company announcements saved: {summary['news_added']}")
 if summary["flows_problem"]:
     print(f"Could not download FII/DII figures and large deals: {summary['flows_problem']}")
-print("Downloads finished.")
+print(f"Downloads finished in {summary['seconds'] // 60} min {summary['seconds'] % 60} s.")

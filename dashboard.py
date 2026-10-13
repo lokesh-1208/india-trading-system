@@ -950,24 +950,26 @@ if page == "Today":
 
 ui.side_heading("Data")
 ui.data_status(fresh == "fresh", status_text)
-if st.sidebar.button("Update data now", type="primary", use_container_width=True,
-                     help="Downloads the newest closing prices, news and FII/DII figures "
-                          "from the internet, then refreshes this page. Takes a few minutes."):
-    bar = st.sidebar.progress(0.0, text="Starting ...")
+def run_with_progress(where, **options):
+    """Run an update with a progress bar, then refresh the page with a short note."""
+    bar = where.progress(0.0, text="Starting ...")
 
     def show_progress(step, done, total):
-        bar.progress(min(1.0, done / total), text=f"{step}: {done} of {total}")
+        bar.progress(min(1.0, done / max(total, 1)), text=f"{step}: {done} of {total}")
 
     try:
-        summary = update.run_update(include_company_data=None, report=show_progress)
-        note = "Data updated."
+        summary = update.run_update(report=show_progress, **options)
+        note = "Data updated in " + (f"{summary['seconds'] // 60} min "
+                                     if summary["seconds"] >= 60 else "") \
+            + f"{summary['seconds'] % 60} s. " + update.describe_prices(summary["prices"])
         if summary["failed_markets"]:
             note += " No data for: " + ", ".join(summary["failed_markets"]) + "."
+        if summary["results_companies"]:
+            note += f" Company results checked for {summary['results_companies']} companies."
+        if summary["results_problem"]:
+            note += " Company results could not be finished."
         if summary["shareholding_problem"]:
             note += " Shareholding could not be refreshed."
-        if summary["missing_days"]["days"]:
-            days = ", ".join(f"{day:%d %b}" for day in summary["missing_days"]["days"])
-            note += f" Yahoo was missing {days}; filled in from NSE."
         if summary["news_problem"] or summary["flows_problem"]:
             note += " NSE announcements or FII/DII figures could not be downloaded."
         else:
@@ -978,22 +980,49 @@ if st.sidebar.button("Update data now", type="primary", use_container_width=True
     st.cache_resource.clear()
     st.rerun()
 
+
+if st.sidebar.button("Update data now", type="primary", use_container_width=True,
+                     help="Adds the newest closing prices from NSE, news, FII/DII figures "
+                          "and results of companies that just reported. Usually 1-2 "
+                          "minutes; once a week the full price history is downloaded "
+                          "too (about 6 minutes more)."):
+    run_with_progress(st.sidebar)
+
 if "update_note" in st.session_state:
     st.sidebar.info(st.session_state.pop("update_note"))
-st.sidebar.caption("Once a day, after 4 pm. The market closes at 3:30, so there is nothing "
-                   "new to download during the day.")
+st.sidebar.caption("Once a day, after 6 pm, when NSE has published the day's closing "
+                   "prices. Earlier in the evening the day's prices come from Yahoo "
+                   "and are corrected on the next update.")
 
 with st.sidebar.expander("More data options"):
+    age = update.full_download_age_days()
+    st.caption("Full price history: not downloaded yet." if age is None
+               else f"Full price history from Yahoo: last downloaded {age} days ago "
+                    f"(again every {config.FULL_PRICES_REFRESH_DAYS} days by itself).")
+    if st.button("Download full price history now", use_container_width=True,
+                 help="Downloads 10 years of prices for every stock again from Yahoo. "
+                      "About 6 minutes. Only needed if prices look wrong."):
+        run_with_progress(st, full_prices=True, include_company_data=False)
     age = update.company_data_age_days()
-    st.caption("Company results and shareholding: not downloaded yet." if age is None
-               else "Company results and shareholding refresh by themselves once a week "
-                    f"(last: {age:.0f} days ago).")
-    if st.button("Refresh company results now", use_container_width=True,
-                 help="Downloads company results and shareholding now instead of waiting "
-                      "for the weekly refresh. Adds several minutes."):
+    st.caption("Company results: not downloaded yet." if age is None
+               else "Company results are downloaded by themselves for companies that "
+                    "just reported. Shareholding is checked once a week.")
+    if st.button("Refresh all company results now", use_container_width=True,
+                 help="Downloads results for every company and the shareholding "
+                      "filings, without downloading prices again. 20 minutes or more."):
+        bar = st.progress(0.0, text="Starting ...")
+
+        def show_company_progress(step, done, total):
+            bar.progress(min(1.0, done / max(total, 1)), text=f"{step}: {done} of {total}")
+
         try:
-            update.run_update(include_company_data=True)
-            st.session_state["update_note"] = "Prices and company results updated."
+            result = update.refresh_company_data(show_company_progress, everything=True,
+                                                 include_shareholding=True)
+            note = f"Company results downloaded for {result['results_companies']} companies."
+            if result["results_problem"] or result["shareholding_problem"]:
+                note += " Some downloads did not finish: " + (
+                    result["results_problem"] or result["shareholding_problem"])
+            st.session_state["update_note"] = note
         except Exception as error:
             st.session_state["update_note"] = f"The update stopped: {error}"
         st.cache_resource.clear()
@@ -1008,7 +1037,7 @@ with st.sidebar.expander("More data options"):
 
 ui.side_heading("Your routine")
 ui.routine([
-    ("Evening, after 4 pm", "Update data. In Your stocks, sell tomorrow at the open if it "
+    ("Evening, after 6 pm", "Update data. In Your stocks, sell tomorrow at the open if it "
                             "says Sell; move a GTT up if it says so."),
     ("Sunday or Monday early", "Place AMO limit buys at the limits of the weekly list."),
     ("Any day", "Record every buy and sell under Record a trade."),

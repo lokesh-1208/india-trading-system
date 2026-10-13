@@ -25,7 +25,7 @@ The first download takes a few minutes.
 
 ## Daily use
 
-1. **Each evening after 4 pm:** press **Update data now** in the dashboard sidebar (or let
+1. **Each evening after 6 pm:** press **Update data now** in the dashboard sidebar (or let
    the scheduled update do it, see the end of this file).
 2. **Each morning:** open the dashboard (`start_dashboard.bat`, or
    `streamlit run dashboard.py`) and read the **Today** page.
@@ -128,7 +128,7 @@ From every start date since 2022 the model beat Nifty by 10-25 points a year.
 | Command | What it does |
 |---|---|
 | `streamlit run dashboard.py` | Opens the dashboard. Its **Update data now** button does the same job as `update_data.py`. |
-| `python update_data.py` | Downloads prices for about 800 stocks, index membership history, Nifty, India VIX, global markets, the rupee, crude, gold, company announcements, FII/DII figures, bulk and block deals, and (weekly) company results and shareholding into `data/`. |
+| `python update_data.py` | Downloads prices for about 800 stocks, index membership history, Nifty, India VIX, global markets, the rupee, crude, gold, company announcements, FII/DII figures, bulk and block deals, results of companies that just reported, and (weekly) shareholding into `data/`. Daily prices come from NSE's day file; the full Yahoo history is downloaded once a week. |
 | `python research/full_model.py` | Runs the model through the past and prints its results and today's scores. |
 | `python research/entry_gap.py` | The buy-range test. |
 | `python stock_card.py TCS` | Everything known about one company: price range, valuation, growth, profitability, debt, dividend, shareholding and a ten-point scorecard. |
@@ -150,7 +150,8 @@ trading/journal.py       your real trades (journal/real_trades.csv, not on GitHu
 trading/update.py        refreshes all data; shared by update_data.py and the dashboard
 trading/data.py          downloads and loads prices and index membership
 trading/indicators.py    EMA, RSI, ATR
-trading/fundamentals.py  company results, ratios, results dates
+trading/fundamentals.py  company results, ratios, results dates, which companies are due
+trading/gaps.py          daily prices from NSE's day file (bhavcopy); fills days Yahoo misses
 trading/shareholding.py  who owns each company: promoters, FII, DII, mutual funds, public
 trading/news.py          company announcements to NSE, sorted into plain categories
 trading/flows.py         daily FII/DII buying and selling, bulk and block deals
@@ -179,6 +180,10 @@ The membership history comes from the public project
 [nifty500-momentum-backtest](https://github.com/rishabhjain0295-web/nifty500-momentum-backtest),
 which built it from NSE's inclusion/exclusion records. `update_data.py` downloads it into
 `data/universe/`. It is not stored in this repository.
+
+That history file sometimes misses a stock that is on NSE's current Nifty 500 list (ITC,
+Tata Power and Federal Bank were missing in October 2026). Such a stock is counted as a
+member from one year ago, so it appears in today's list while older backtests leave it out.
 
 ## Known limits
 

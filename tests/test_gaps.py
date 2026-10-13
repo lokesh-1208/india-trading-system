@@ -39,7 +39,7 @@ def test_days_before_a_new_listing_are_not_missing():
 def test_bhavcopy_keeps_only_normal_shares():
     table = gaps.parse_bhavcopy(BHAVCOPY)
     assert sorted(table.index) == ["AAA", "BBB"]           # the gold bond is left out
-    assert table.loc["AAA"].tolist() == [100, 110, 95, 105, 5000]
+    assert table.loc["AAA"].tolist() == [100, 110, 95, 105, 5000, 99]   # last: previous close
 
 
 def test_scaling_factor_is_yahoo_price_over_nse_price():
@@ -78,3 +78,46 @@ def test_new_row_goes_in_date_order():
     combined = gaps.add_rows(table, {pd.Timestamp("2026-10-12"): bar})
     assert list(combined.index.strftime("%d")) == ["09", "12", "13"]
     assert combined.loc["2026-10-12", "Close"] == 1.5
+
+
+def test_quick_update_takes_the_last_two_days_again():
+    table = prices(["2026-10-01", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-12"])
+    wanted = gaps.missing_days(table, DAYS, refresh_last=2)
+    assert wanted == [pd.Timestamp("2026-10-12"), pd.Timestamp("2026-10-13")]
+
+
+def test_saved_bar_is_replaced_by_the_new_one():
+    table = prices(["2026-10-09", "2026-10-12"])
+    bar = pd.Series({"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 10.0})
+    combined = gaps.add_rows(table, {pd.Timestamp("2026-10-12"): bar})
+    assert len(combined) == 2 and combined.loc["2026-10-12", "Close"] == 1.5
+
+
+def _nse_day(prev_close):
+    return pd.DataFrame({"Close": [50.0], "PrevClose": [prev_close]}, index=["AAA"])
+
+
+def test_split_is_noticed_from_nse_previous_close():
+    table = prices(["2026-10-08", "2026-10-09"], close=100.0)
+    # a 1:2 split: NSE now shows yesterday's close as 50
+    assert gaps.had_corporate_action(table, pd.Timestamp("2026-10-12"), _nse_day(50.0), "AAA")
+
+
+def test_normal_day_is_not_a_corporate_action():
+    table = prices(["2026-10-08", "2026-10-09"], close=100.0)
+    assert not gaps.had_corporate_action(table, pd.Timestamp("2026-10-12"),
+                                         _nse_day(100.0), "AAA")
+
+
+def test_without_nse_file_no_corporate_action_is_assumed():
+    table = prices(["2026-10-09"], close=100.0)
+    assert not gaps.had_corporate_action(table, pd.Timestamp("2026-10-12"), None, "AAA")
+
+
+def test_same_bar_is_recognised_so_the_file_is_not_rewritten():
+    table = prices(["2026-10-12"], close=100.0)
+    same = pd.Series({"Open": 100.0, "High": 100.0, "Low": 100.0, "Close": 100.0,
+                      "Volume": 1000.0})
+    assert gaps.same_bar(table, pd.Timestamp("2026-10-12"), same)
+    assert not gaps.same_bar(table, pd.Timestamp("2026-10-12"), same.replace(100.0, 101.0))
+    assert not gaps.same_bar(table, pd.Timestamp("2026-10-13"), same)

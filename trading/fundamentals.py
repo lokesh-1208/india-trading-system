@@ -6,6 +6,7 @@ business is behind the chart. They are used in two ways:
   - results block: no new trade just before a company announces results
 """
 
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
@@ -19,6 +20,7 @@ ANNUAL_COLUMNS = [
 ]
 QUARTERLY_COLUMNS = ["symbol", "period_end", "revenue", "net_income"]
 RESULTS_COLUMNS = ["symbol", "date"]
+FETCHED_COLUMNS = ["symbol", "fetched"]
 DIVIDEND_COLUMNS = ["symbol", "date", "amount"]
 
 
@@ -140,7 +142,122 @@ def update_fundamentals(symbols, workers=6):
     _merge_and_save(config.QUARTERLY_FILE, QUARTERLY_COLUMNS, quarterly, refreshed)
     _merge_and_save(config.RESULTS_DATES_FILE, RESULTS_COLUMNS, results, refreshed)
     _merge_and_save(config.DIVIDENDS_FILE, DIVIDEND_COLUMNS, dividends, refreshed)
+    record_fetched(symbols)
     return len({row["symbol"] for row in annual})
+
+
+# ------------------------------------------------- which companies are due --
+def _today():
+    return pd.Timestamp.now(tz="Asia/Kolkata").normalize().tz_localize(None)
+
+
+def load_fetched():
+    """{symbol: day its results were last downloaded}.
+
+    The first time (no record yet) every company already saved gets the date of
+    the saved files, moved back by 0-29 days depending on its name, so the
+    monthly re-check is spread over the month instead of all on one day.
+    """
+    if config.RESULTS_FETCHED_FILE.exists():
+        table = pd.read_csv(config.RESULTS_FETCHED_FILE, parse_dates=["fetched"])
+        return dict(zip(table["symbol"], table["fetched"]))
+    if not config.ANNUAL_FILE.exists():
+        return {}
+    saved_on = pd.Timestamp(config.ANNUAL_FILE.stat().st_mtime, unit="s").normalize()
+    symbols = set(pd.read_csv(config.ANNUAL_FILE, usecols=["symbol"])["symbol"])
+    if config.QUARTERLY_FILE.exists():
+        symbols |= set(pd.read_csv(config.QUARTERLY_FILE, usecols=["symbol"])["symbol"])
+    spread = config.RESULTS_FULL_REFRESH_DAYS
+    return {symbol: saved_on - pd.Timedelta(days=zlib.crc32(symbol.encode()) % spread)
+            for symbol in symbols}
+
+
+def record_fetched(symbols, day=None):
+    """Remember that these companies' results were downloaded today."""
+    day = _today() if day is None else pd.Timestamp(day)
+    fetched = load_fetched()
+    fetched.update({symbol: day for symbol in symbols})
+    table = pd.DataFrame(sorted(fetched.items()), columns=FETCHED_COLUMNS)
+    table["fetched"] = pd.to_datetime(table["fetched"]).dt.strftime("%Y-%m-%d")
+    config.RESULTS_FETCHED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(config.RESULTS_FETCHED_FILE, index=False)
+
+
+def quarter_before(day):
+    """The last quarter end (31 Mar, 30 Jun, 30 Sep, 31 Dec) before this day."""
+    return (pd.Timestamp(day).normalize() - pd.offsets.QuarterEnd(1)).normalize()
+
+
+def results_events(results_dates=None, announcements=None):
+    """Table (symbol, date) of results days: Yahoo's dates and NSE result filings."""
+    parts = []
+    if results_dates is not None and len(results_dates) > 0:
+        parts.append(results_dates[["symbol", "date"]])
+    if announcements is not None and len(announcements) > 0:
+        filed = announcements[announcements["category"] == "Results"]
+        parts.append(pd.DataFrame({"symbol": filed["symbol"],
+                                   "date": pd.to_datetime(filed["time"]).dt.normalize()}))
+    if not parts:
+        return pd.DataFrame(columns=["symbol", "date"])
+    return pd.concat(parts, ignore_index=True)
+
+
+def due_symbols(symbols, today=None, fetched=None, quarterly=None, events=None,
+                annual=None):
+    """Companies whose results should be downloaded now. A company is due when:
+
+      - its results were never downloaded, or
+      - they were last downloaded config.RESULTS_FULL_REFRESH_DAYS or more ago
+        (catches corrections and anything missed), or
+      - it announced results in the last config.RESULTS_WATCH_DAYS days and the
+        saved figures (quarterly or yearly) do not have that quarter yet. Yahoo often takes a few
+        days to add a new quarter, so this is tried again once a day until it
+        appears or the window passes.
+
+    Nothing is downloaded twice on the same day.
+    """
+    today = _today() if today is None else pd.Timestamp(today)
+    fetched = load_fetched() if fetched is None else fetched
+    if quarterly is None:
+        quarterly = load_quarterly()
+    if annual is None:
+        annual = load_annual()
+    if events is None:
+        from trading import news
+        try:
+            announcements = news.load()
+        except Exception:
+            announcements = None
+        events = results_events(load_results_dates(), announcements)
+
+    # Newest period saved, quarterly or yearly (Yahoo often lists the March
+    # quarter only in the yearly figures).
+    periods = [table[["symbol", "period_end"]] for table in (quarterly, annual)
+               if table is not None and len(table) > 0]
+    latest_quarter = {} if not periods else \
+        pd.concat(periods).groupby("symbol")["period_end"].max().to_dict()
+    window_start = today - pd.Timedelta(days=config.RESULTS_WATCH_DAYS)
+    recent = events[(events["date"] >= window_start) & (events["date"] <= today)]
+    last_event = recent.groupby("symbol")["date"].max().to_dict()
+
+    due = []
+    for symbol in symbols:
+        last = fetched.get(symbol)
+        if last is None or pd.isna(last):
+            due.append(symbol)
+            continue
+        last = pd.Timestamp(last).normalize()
+        if last >= today:
+            continue
+        if (today - last).days >= config.RESULTS_FULL_REFRESH_DAYS:
+            due.append(symbol)
+            continue
+        event = last_event.get(symbol)
+        if event is not None:
+            have = latest_quarter.get(symbol)
+            if have is None or pd.Timestamp(have) < quarter_before(event):
+                due.append(symbol)
+    return due
 
 
 # ---------------------------------------------------------------- loading ---

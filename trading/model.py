@@ -25,16 +25,17 @@ The same score can be traded in two styles (MODEL_STYLES in config.py):
 A stock with results due in the next few days is not bought. The lowest
 scores are listed as sell / avoid candidates.
 
-Nothing uses information from the future: yearly results count from 75 days
-after the year ends, quarterly results from 45 days, shareholding from the
-day it was filed, prices and news only up to the day of the check.
+Nothing uses information from the future: results count from the day after
+the company filed them with NSE (when the NSE filing is known; otherwise 75
+days after the year ends, 45 after the quarter), shareholding from the day it
+was filed, prices and news only up to the day of the check.
 """
 
 import numpy as np
 import pandas as pd
 
 import config
-from trading import (data, flows, fundamentals, indicators, news, rotation,
+from trading import (data, flows, fundamentals, indicators, news, pledge, rotation,
                      shareholding)
 
 # Factor name -> +1 when a higher figure is better, -1 when a lower one is.
@@ -42,11 +43,13 @@ GROUPS = {
     "ownership": {
         "fii_change": 1, "mf_change": 1, "promoter_change": 1, "dii_change": 1,
         "insurance_change": 1, "public_change": -1, "pledged": -1, "fund_count": 1,
+        "pledged_pct": -1,
     },
     "business": {
         "sales_growth": 1, "profit_growth": 1, "sales_growth_3y": 1, "profit_growth_3y": 1,
         "net_margin": 1, "return_on_equity": 1, "debt_to_equity": -1,
         "quarter_sales_growth": 1, "quarter_profit_growth": 1, "scorecard": 1,
+        "roce": 1, "cash_conversion": 1,
     },
     "valuation": {
         "pe_vs_industry": -1, "price_to_book": -1, "earnings_yield": 1, "dividend_yield": 1,
@@ -83,10 +86,42 @@ def annual_factors(annual):
 
     revenue_1, profit_1 = earlier("revenue", 1), earlier("net_income", 1)
     revenue_3, profit_3 = earlier("revenue", 3), earlier("net_income", 3)
+
+    # Return on capital employed: profit before interest and tax / (equity + debt).
+    # Only from NSE filings, which give profit before tax and finance costs.
+    def column(name):
+        return table[name] if name in table else pd.Series(np.nan, index=table.index)
+
+    pbt, finance = column("pbt"), column("finance_costs")
+    capital = equity + column("total_debt").fillna(0.0)
+    roce = ((pbt + finance.fillna(0.0)) / capital).where((capital > 0) & pbt.notna())
+    # Cash conversion: cash from operations / profit over the last 3 years (at
+    # least 2 with cash flow known). Below about 0.8 the profit is not turning
+    # into cash.
+    cfo = column("cfo")
+    if "cfo" in table:
+        cash_years = [cfo, earlier("cfo", 1), earlier("cfo", 2)]
+        profit_years = [profit, earlier("net_income", 1), earlier("net_income", 2)]
+        known = sum(cash.notna().astype(int) for cash in cash_years)
+        cash_3 = sum(cash.fillna(0.0) for cash in cash_years)
+        profit_3 = sum(earned.where(cash.notna(), 0.0).fillna(0.0)
+                       for earned, cash in zip(profit_years, cash_years))
+        usable = (known >= 2) & (profit_3 > 0)
+        cash_conversion = (cash_3 / profit_3).where(usable)
+    else:
+        cash_conversion = pd.Series(np.nan, index=table.index)
+
+    # The day a year's numbers became public: NSE's filing time when known,
+    # otherwise a fixed lag after the year end.
+    lagged = table["period_end"] + pd.Timedelta(days=config.REPORTING_LAG_DAYS)
+    filed = pd.to_datetime(column("filed"), errors="coerce").dt.normalize() \
+        + pd.Timedelta(days=1)
+    available = filed.where(filed.notna(), lagged)
     return pd.DataFrame({
         "symbol": table["symbol"],
         "period_end": table["period_end"],
-        "available": table["period_end"] + pd.Timedelta(days=config.REPORTING_LAG_DAYS),
+        "available": available,
+        "roce": roce, "cash_conversion": cash_conversion,
         "net_income": profit, "equity": equity, "shares": table["shares"],
         "sales_growth": (revenue / revenue_1 - 1).where(revenue_1 > 0),
         "profit_growth": ((profit - profit_1) / profit_1.abs()).where(profit_1 != 0),
@@ -114,10 +149,17 @@ def quarterly_factors(quarterly):
     four = by_company["net_income"].rolling(4).sum().reset_index(level=0, drop=True)
     in_a_row = (table["number"] - by_company["number"].shift(3)) == 3
     before = table["net_income_before"]
+    lagged = table["period_end"] + pd.Timedelta(days=config.MODEL_QUARTER_LAG_DAYS)
+    if "filed" in table:
+        filed = pd.to_datetime(table["filed"], errors="coerce").dt.normalize() \
+            + pd.Timedelta(days=1)
+        available = filed.where(filed.notna(), lagged)
+    else:
+        available = lagged
     return pd.DataFrame({
         "symbol": table["symbol"],
         "quarter_end": table["period_end"],
-        "available": table["period_end"] + pd.Timedelta(days=config.MODEL_QUARTER_LAG_DAYS),
+        "available": available,
         "quarter_sales_growth": (table["revenue"] / table["revenue_before"] - 1).where(
             table["revenue_before"] > 0),
         "quarter_profit_growth": ((table["net_income"] - before) / before.abs()).where(
@@ -300,6 +342,7 @@ class Model:
         self.industry = get("industry") or {}
         self.news = get("news")
         self.deals = get("deals")
+        self.pledges = get("pledges")
 
         self.checks = market_checks(nifty, markets, get("fii_net"))
         self.market_score = market_score(self.checks)
@@ -336,9 +379,12 @@ class Model:
         year = _latest(self.annual, day, "period_end", 640).reindex(symbols)
         quarter = _latest(self.quarterly, day, "quarter_end", 250).reindex(symbols)
         for name in ["sales_growth", "profit_growth", "sales_growth_3y", "profit_growth_3y",
-                     "net_margin", "return_on_equity", "debt_to_equity"]:
+                     "net_margin", "return_on_equity", "debt_to_equity", "roce",
+                     "cash_conversion"]:
             table[name] = year[name] if name in year else np.nan
-        table.loc[financial, "debt_to_equity"] = np.nan     # borrowing is a bank's raw material
+        # Borrowing is a bank's raw material, and its cash flow is mostly lending:
+        # debt, ROCE and cash conversion say nothing about a finance company.
+        table.loc[financial, ["debt_to_equity", "roce", "cash_conversion"]] = np.nan
         for name in ["quarter_sales_growth", "quarter_profit_growth"]:
             table[name] = quarter[name] if name in quarter else np.nan
 
@@ -366,7 +412,7 @@ class Model:
             paid = paid.groupby("symbol")["amount"].sum().reindex(symbols).fillna(0.0)
             table["dividend_yield"] = (paid / close).where(profit.notna() | (paid > 0))
 
-        # ---- the ten-point scorecard ----
+        # ---- the twelve-point scorecard ----
         growth = config.SCORE_MIN_GROWTH
         passed = [
             table["sales_growth"] >= growth, table["profit_growth"] >= growth,
@@ -377,6 +423,8 @@ class Model:
             financial | (table["debt_to_equity"] <= config.SCORE_MAX_DEBT_TO_EQUITY),
             table["pe"] <= table["industry_pe"],
             table["dividend_yield"] > 0,
+            financial | (table["roce"] >= config.SCORE_MIN_ROCE),
+            financial | (table["cash_conversion"] >= config.SCORE_MIN_CASH_CONVERSION),
         ]
         table["scorecard"] = sum(check.astype(float) for check in passed).where(profit.notna())
 
@@ -384,6 +432,15 @@ class Model:
         owners = _latest(self.ownership, day, "quarter_end", 200).reindex(symbols)
         for name in GROUPS["ownership"]:
             table[name] = owners[name] if name in owners else np.nan
+        # Pledge %: only from the day NSE published it (the history starts in Oct 2026).
+        table["pledged_pct"] = np.nan
+        if self.pledges is not None and len(self.pledges) > 0:
+            known = self.pledges[(self.pledges["published"] <= day + pd.Timedelta(days=1))
+                                 & (self.pledges["published"] >= day - pd.Timedelta(days=200))]
+            if len(known):
+                newest = known.sort_values("published").drop_duplicates("symbol", keep="last")
+                table["pledged_pct"] = newest.set_index("symbol")["pledged_of_promoter_pct"] \
+                    .reindex(symbols)
 
         # ---- news and deals: only for days the saved history covers ----
         table["news_score"] = np.nan
@@ -548,6 +605,7 @@ def from_disk(stocks, nifty):
         "industry": dict(zip(universe["Symbol"], universe["Industry"])),
         "news": news.load(),
         "deals": flows.load_deals(),
+        "pledges": pledge.load(),
         "fii_net": fii_net,
     }
     markets = {}

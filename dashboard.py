@@ -9,8 +9,8 @@ import streamlit as st
 
 import config
 from trading import (breadth, charts, company, data, flows, fundamentals, indicators, journal,
-                     model, movers, news, newsview, picks, premarket, report, rotation, today,
-                     ui, update)
+                     model, movers, news, newsview, picks, pledge, premarket, report, rotation,
+                     today, ui, update)
 from trading.screens import Screens
 
 st.set_page_config(page_title="Kasauti", layout="wide")
@@ -304,7 +304,7 @@ def company_page():
                        else " not scored by the model"))
     ui.chips(stands)
 
-    tiles = st.columns(6)
+    tiles = st.columns(8)
     cap = card["market_cap_crore"]
     cap_text = ("-" if cap is None or pd.isna(cap) else
                 f"Rs {cap / 1e5:,.1f}L cr" if cap >= 1e5 else f"Rs {cap:,.0f} cr")
@@ -314,7 +314,22 @@ def company_page():
                     delta_color="off")
     tiles[3].metric("Return on equity", pct(card["return_on_equity"], signed=False))
     tiles[4].metric("Debt to equity", num(card["debt_to_equity"], 2))
-    tiles[5].metric("Scorecard", f"{company.score(card, financial)} of 10")
+    tiles[5].metric("ROCE", "-" if financial else pct(card.get("roce"), signed=False),
+                    help="Return on capital employed: profit before interest and tax / "
+                         "(equity + debt). Not used for banks and finance companies.")
+    tiles[6].metric("Cash / profit, 3y", "-" if financial else num(card.get("cash_conversion"), 2),
+                    help="Cash from operations divided by reported profit over the last 3 "
+                         "years. Below 0.8 means profit is not turning into cash.")
+    tiles[7].metric("Scorecard", f"{company.score(card, financial)} of "
+                                 f"{len(company.scorecard(card, financial))}")
+    pledged_pct = load_pledges().get(symbol)
+    if pledged_pct is not None and pd.notna(pledged_pct) \
+            and pledged_pct >= config.PLEDGE_RED_FLAG_PCT:
+        st.warning(f"Red flag: promoters have pledged {pledged_pct:.1f}% of their shares. If "
+                   "the price falls, lenders can sell them, pushing the price down further.")
+    if card.get("results_filed") is not None:
+        st.caption(f"Latest results ({card['quarter']:%b %Y} quarter) filed with NSE on "
+                   f"{card['results_filed']:%d %b %Y, %I:%M %p}.")
 
     # ---- the model's view ----
     title = (f"Model view: rank {rank} of {len(ranking)}, score {ranking.loc[symbol, 'score']:.0f}"
@@ -438,6 +453,8 @@ def company_page():
                 }), hide_index=True, use_container_width=True)
             with right:
                 pledged = {True: "Yes", False: "No", None: "Not stated"}[owners["promoters_pledged"]]
+                if pledged_pct is not None and pd.notna(pledged_pct):
+                    pledged = f"{pledged_pct:.1f}% of their shares"
                 st.metric("Promoter shares pledged", pledged)
                 st.markdown("**Mutual fund schemes holding over 1%**")
                 if owners["funds"]:
@@ -473,11 +490,33 @@ def company_page():
                          hide_index=True, use_container_width=True)
 
     # ---- scorecard ----
-    with st.expander(f"Scorecard (a rule of thumb, not part of the model): "
-                     f"{company.score(card, financial)} of 10"):
-        ui.checks(company.scorecard(card, financial))
-        st.caption("– means the figure is not available. These ten checks are common rules of "
-                   "thumb. They are not part of the model's score and have not been tested.")
+    checks = company.scorecard(card, financial)
+    with st.expander(f"Scorecard: {company.score(card, financial)} of {len(checks)}"):
+        ui.checks(checks)
+        st.caption("– means the figure is not available (ROCE and cash flow need NSE's "
+                   "filings; they do not apply to banks and finance companies). These are "
+                   "common rules of thumb. The number of checks passed is one of the "
+                   "business factors in the model's score.")
+
+    # ---- annual reports and concall transcripts ----
+    reports, transcripts = load_documents(symbol)
+    with st.expander(f"Annual reports and concall transcripts: {len(reports)} reports, "
+                     f"{len(transcripts)} transcripts"):
+        ui.section_note("For reading what management says: plans, guidance, risks. Not "
+                        "used by the model.")
+        if len(reports):
+            st.markdown("**Annual reports**")
+            st.dataframe(reports, hide_index=True, use_container_width=True,
+                         column_config={"Report": st.column_config.LinkColumn(
+                             "Report", display_text="open")})
+        if len(transcripts):
+            st.markdown("**Earnings calls and investor meets (last year)**")
+            st.dataframe(transcripts, hide_index=True, use_container_width=True,
+                         column_config={"Filing": st.column_config.LinkColumn(
+                             "Filing", display_text="open"),
+                             "What": st.column_config.TextColumn(width="large")})
+        if not len(reports) and not len(transcripts):
+            ui.empty("Nothing found on NSE for this company.")
 
 
 def _my_trades(trades, prices, symbols, last_day=None):
@@ -541,9 +580,11 @@ def _my_trades(trades, prices, symbols, last_day=None):
 
 GROUP_NOTES = {
     "ownership": "FII, mutual fund, promoter, DII, insurer and public holding changes; "
-                 "pledged shares; number of fund schemes above 1%",
+                 "pledged shares (yes/no, and the % pledged from Oct 2026); number of fund "
+                 "schemes above 1%",
     "business": "sales and profit growth (1 and 3 years), margin, return on equity, debt, "
-                "latest quarter against a year ago, the ten-point scorecard",
+                "latest quarter against a year ago, ROCE, cash from operations against "
+                "profit, the twelve-point scorecard",
     "valuation": "PE against its industry, price to book, earnings per share against "
                  "price, dividend yield",
     "price": "6-month strength, EMA trend, RSI, volume, ATR, distance from the 52-week high",
@@ -595,6 +636,40 @@ def load_movers():
              for side in ("up", "down")}
     reading = movers.mood(moves, data.load_market("INDIAVIX"), nifty)
     return day, sides, reading
+
+
+@st.cache_resource(show_spinner=False)
+def load_pledges():
+    return pledge.latest()
+
+
+@st.cache_data(show_spinner="Looking up reports on NSE ...", ttl=24 * 3600)
+def load_documents(symbol):
+    """Annual reports (from NSE) and concall/investor-meet filings (from saved news)."""
+    reports = pd.DataFrame(columns=["Year", "Report", "Size"])
+    try:
+        from trading import nse
+        raw = nse.get_json(nse.session(), "/api/annual-reports", index="equities",
+                           symbol=symbol)
+        items = raw.get("data", []) if isinstance(raw, dict) else raw or []
+        reports = pd.DataFrame([{"Year": f"{item.get('fromYr')}-{item.get('toYr')}",
+                                 "Report": item.get("fileName"),
+                                 "Size": item.get("attFileSize") or ""}
+                                for item in items[:5] if item.get("fileName")],
+                               columns=["Year", "Report", "Size"])
+    except Exception:
+        pass
+    saved = load_news()
+    calls = saved[(saved["symbol"] == symbol)
+                  & saved["subject"].str.contains(
+                      r"Analysts|Investor Meet|Con\. Call|Earnings Call|Transcript",
+                      case=False, regex=True)
+                  & (saved["detail"].str.contains("transcript|recording|audio",
+                                                  case=False, regex=True))]
+    transcripts = pd.DataFrame({"Date": calls["time"].dt.strftime("%d %b %Y"),
+                                "What": [today.short_news(text, 140) for text in calls["detail"]],
+                                "Filing": calls["link"]}).head(8)
+    return reports, transcripts
 
 
 # ------------------------------------------------- reading the news ---------
@@ -1225,6 +1300,11 @@ def run_with_progress(where, **options):
             + f"{summary['seconds'] % 60} s. " + update.describe_prices(summary["prices"])
         if summary["failed_markets"]:
             note += " No data for: " + ", ".join(summary["failed_markets"]) + "."
+        if summary.get("filings_companies"):
+            note += f" NSE result filings checked for {summary['filings_companies']} companies."
+        if summary.get("filings_left"):
+            note += (f" First download of NSE filings: {summary['filings_left']} companies "
+                     "left, continued on the next updates.")
         if summary["results_companies"]:
             note += f" Company results checked for {summary['results_companies']} companies."
         if summary["results_problem"]:
@@ -1279,7 +1359,8 @@ with st.sidebar.expander("More data options"):
         try:
             result = update.refresh_company_data(show_company_progress, everything=True,
                                                  include_shareholding=True)
-            note = f"Company results downloaded for {result['results_companies']} companies."
+            note = (f"NSE result filings checked for {result.get('filings_companies', 0)} "
+                    f"companies; Yahoo results for {result['results_companies']}.")
             if result["results_problem"] or result["shareholding_problem"]:
                 note += " Some downloads did not finish: " + (
                     result["results_problem"] or result["shareholding_problem"])

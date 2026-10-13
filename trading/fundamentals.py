@@ -261,18 +261,35 @@ def due_symbols(symbols, today=None, fetched=None, quarterly=None, events=None,
 
 
 # ---------------------------------------------------------------- loading ---
+NSE_ANNUAL_EXTRA = ["cfo", "capex", "pbt", "finance_costs", "bank", "filed"]
+
+
 def load_annual():
-    """Yearly results for all companies, or None if not downloaded yet."""
-    if not config.ANNUAL_FILE.exists():
-        return None
-    return pd.read_csv(config.ANNUAL_FILE, parse_dates=["period_end"])
+    """Yearly results for all companies, or None if nothing is downloaded yet.
+
+    NSE's own filings come first (exact filing dates, cash flow, profit before
+    tax, finance costs); Yahoo fills companies and years NSE does not have,
+    and the balance sheet of older NSE years (NSE filings carry it from 2022).
+    """
+    from trading import filings
+    yahoo = pd.read_csv(config.ANNUAL_FILE, parse_dates=["period_end"]) \
+        if config.ANNUAL_FILE.exists() else None
+    nse = filings.annual_table() if config.NSE_RESULTS_FILE.exists() else None
+    if nse is None or len(nse) == 0:
+        return yahoo
+    return filings.merge_with_yahoo(nse, yahoo, ANNUAL_COLUMNS + NSE_ANNUAL_EXTRA,
+                                    fill=["equity", "total_debt", "shares"])
 
 
 def load_quarterly():
-    """Quarterly results for all companies, or None if not downloaded yet."""
-    if not config.QUARTERLY_FILE.exists():
-        return None
-    return pd.read_csv(config.QUARTERLY_FILE, parse_dates=["period_end"])
+    """Quarterly results for all companies (NSE first, then Yahoo), or None."""
+    from trading import filings
+    yahoo = pd.read_csv(config.QUARTERLY_FILE, parse_dates=["period_end"]) \
+        if config.QUARTERLY_FILE.exists() else None
+    nse = filings.quarterly_table() if config.NSE_RESULTS_FILE.exists() else None
+    if nse is None or len(nse) == 0:
+        return yahoo
+    return filings.merge_with_yahoo(nse, yahoo, QUARTERLY_COLUMNS + ["filed"])
 
 
 def load_dividends():

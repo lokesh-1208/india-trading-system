@@ -153,6 +153,10 @@ trading/indicators.py    EMA, RSI, ATR
 trading/fundamentals.py  company results, ratios, results dates, which companies are due
 trading/gaps.py          daily prices from NSE's day file (bhavcopy); fills days Yahoo misses
 trading/movers.py        market movers on the Today page: heavy buying/selling and why (info only)
+trading/premarket.py     before the open: global moves, overnight news, NSE pre-open prices (info only)
+trading/newsview.py      reads announcements as good or bad; news ideas; what usually happened after news
+trading/filings.py       company results from NSE's own filings (XBRL): 2018 on, cash flow, ROCE, filing times
+trading/pledge.py        % of promoter shares pledged (NSE)
 trading/shareholding.py  who owns each company: promoters, FII, DII, mutual funds, public
 trading/news.py          company announcements to NSE, sorted into plain categories
 trading/flows.py         daily FII/DII buying and selling, bulk and block deals
@@ -223,4 +227,5 @@ member from one year ago, so it appears in today's list while older backtests le
 - `start_dashboard.bat`: double-click to open the dashboard. Right-click it and choose
   "Send to > Desktop (create shortcut)" to get a desktop icon.
 - `schedule_daily_update.bat`: double-click once. Windows will then download the latest
-  data every weekday at 6:30 pm (the laptop must be on). The log is `reports/update_log.txt`.
+  data every weekday at 6:30 pm, and refresh the before-the-open data at 9:10 am (the
+  laptop must be on). The log is `reports/update_log.txt`.

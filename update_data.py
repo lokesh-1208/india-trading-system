@@ -32,7 +32,11 @@ if summary["failed_markets"]:
 print(update.describe_prices(summary["prices"]))
 print(f"Stocks without data on Yahoo: {summary['stocks_without_data']}")
 print("These are mostly companies that were delisted, merged or renamed.")
-print(f"Company results downloaded for {summary['results_companies']} companies "
+print(f"NSE result filings checked for {summary.get('filings_companies', 0)} companies.")
+if summary.get("filings_left"):
+    print(f"First download of NSE filings: {summary['filings_left']} companies left "
+          "(continued on the next updates).")
+print(f"Yahoo company results downloaded for {summary['results_companies']} companies "
       "(those that just reported, or not checked for a month).")
 if summary["results_problem"]:
     print(f"Could not finish the company results download: {summary['results_problem']}")

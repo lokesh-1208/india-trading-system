@@ -109,6 +109,15 @@ RESULTS_DATES_FILE = FUNDAMENTALS_DIR / "results_dates.csv"
 DIVIDENDS_FILE = FUNDAMENTALS_DIR / "dividends.csv"
 FUNDAMENTALS_REFRESH_DAYS = 7    # shareholding filings are checked once a week
 RESULTS_FETCHED_FILE = FUNDAMENTALS_DIR / "results_fetched.csv"   # when each company was fetched
+# Company results from NSE's own filings (trading/filings.py), preferred to Yahoo.
+NSE_RESULTS_FILE = FUNDAMENTALS_DIR / "nse_results.csv"     # every filing read, per period
+NSE_TRIED_FILE = FUNDAMENTALS_DIR / "nse_filings_tried.csv" # filings already downloaded
+NSE_CHECKED_FILE = FUNDAMENTALS_DIR / "nse_checked.csv"     # when each company's list was checked
+FILINGS_BACKFILL_SECONDS = 240          # first download: at most this long per daily update
+FILINGS_START = "2016-03-31"            # NSE's machine-readable filings start about here
+FILINGS_ALL_QUARTERS_FROM = "2020-03-31"  # every quarter from here; before, March and Sept only
+FILINGS_WORKERS = 6                     # companies downloaded at the same time
+FILINGS_PAUSE = 0.2                     # seconds between two downloads, to be polite to NSE
 # Company results are downloaded only for companies that are due (see
 # fundamentals.due_symbols): just announced results, or not checked for a month.
 RESULTS_WATCH_DAYS = 21          # keep checking this long after a results announcement
@@ -130,13 +139,15 @@ FINANCIAL_INDUSTRY = "Financial Services"
 USE_RESULTS_BLOCK = True
 RESULTS_BLOCK_DAYS = 5
 
-# Company scorecard: ten yes/no checks shown on the company card and in the
+# Company scorecard: twelve yes/no checks shown on the company card and in the
 # daily report. The score is the number of checks passed. These thresholds are
 # common rules of thumb. They have not been proven by a backtest.
 SCORE_MIN_GROWTH = 0.10              # sales and profit growth of at least 10%
 SCORE_MIN_RETURN_ON_EQUITY = 0.15
 SCORE_MIN_NET_MARGIN = 0.10
 SCORE_MAX_DEBT_TO_EQUITY = 1.0       # not applied to banks and finance companies
+SCORE_MIN_ROCE = 0.15                # return on capital employed (not for banks and finance)
+SCORE_MIN_CASH_CONVERSION = 0.8      # cash from operations / profit over 3 years (not finance)
 
 # ------------------------------------------------------ shareholding --------
 # Who owns each company: promoters, foreign funds (FII), Indian funds (DII,
@@ -144,6 +155,8 @@ SCORE_MAX_DEBT_TO_EQUITY = 1.0       # not applied to banks and finance companie
 # companies make to NSE.
 SHAREHOLDING_FILE = FUNDAMENTALS_DIR / "shareholding.csv"
 FUND_HOLDERS_FILE = FUNDAMENTALS_DIR / "mutual_fund_holders.csv"
+PLEDGE_FILE = FUNDAMENTALS_DIR / "pledges.csv"   # % of promoter shares pledged (NSE)
+PLEDGE_RED_FLAG_PCT = 25.0       # more of the promoters' shares pledged than this: warning
 SHAREHOLDING_QUARTERS = 20       # about 5 years. Each quarter is downloaded only once,
                                  # so the first run is long and later runs are quick.
 NSE_SITE = "https://www.nseindia.com"

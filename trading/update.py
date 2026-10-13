@@ -17,7 +17,8 @@ import time
 import pandas as pd
 
 import config
-from trading import data, fundamentals, flows, gaps, news, premarket, shareholding, shorts
+from trading import (data, filings, fundamentals, flows, gaps, news, pledge, premarket,
+                     shareholding, shorts)
 
 BATCH = 60
 
@@ -127,6 +128,27 @@ def refresh_company_data(report=None, everything=False, include_shareholding=Non
     summary = {"results_companies": 0, "results_problem": None,
                "shareholding_refreshed": False, "shareholding_problem": None}
     symbols = [symbol for symbol in data.all_symbols() if symbol not in set(skip)]
+
+    # NSE filings first: companies that just reported (or not checked for a
+    # month), then, while the first download is not finished, a few minutes of it.
+    summary["filings_companies"] = 0
+    try:
+        due = symbols if everything else fundamentals.due_symbols(
+            symbols, fetched=filings.load_checked())
+        missing = set(filings.companies_missing(symbols))
+        due = [symbol for symbol in due if symbol not in missing]
+        if due:
+            summary["filings_companies"] += filings.update_filings(due, report)
+        if missing:
+            current = set(data.load_universe()["Symbol"])
+            order = sorted(missing, key=lambda symbol: symbol not in current)
+            summary["filings_companies"] += filings.update_filings(
+                order, report, max_seconds=None if everything else config.FILINGS_BACKFILL_SECONDS)
+        summary["filings_left"] = len(filings.companies_missing(symbols))
+    except Exception as error:
+        summary["results_problem"] = f"NSE filings: {error}"
+        summary["filings_left"] = None
+
     if not everything:
         symbols = fundamentals.due_symbols(symbols)
     summary["results_companies"] = len(symbols)
@@ -146,6 +168,7 @@ def refresh_company_data(report=None, everything=False, include_shareholding=Non
             for first in range(0, len(current), BATCH):
                 shareholding.update_shareholding(current[first:first + BATCH])
                 report("Shareholding", min(first + BATCH, len(current)), len(current))
+            pledge.update(current, report)
             summary["shareholding_refreshed"] = True
         except Exception as error:
             summary["shareholding_problem"] = str(error)
@@ -191,8 +214,9 @@ def run_update(include_company_data=None, report=None, full_prices=None):
     report("Company announcements", 1, 1)
 
     if include_company_data is False:
-        summary.update(results_companies=0, results_problem=None,
-                       shareholding_refreshed=False, shareholding_problem=None)
+        summary.update(results_companies=0, results_problem=None, filings_companies=0,
+                       filings_left=None, shareholding_refreshed=False,
+                       shareholding_problem=None)
     else:
         summary.update(refresh_company_data(
             report, everything=bool(include_company_data),

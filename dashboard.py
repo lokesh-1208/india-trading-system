@@ -9,7 +9,8 @@ import streamlit as st
 
 import config
 from trading import (breadth, charts, company, data, flows, fundamentals, indicators, journal,
-                     model, movers, news, picks, report, rotation, today, ui, update)
+                     model, movers, news, newsview, picks, premarket, report, rotation, today,
+                     ui, update)
 from trading.screens import Screens
 
 st.set_page_config(page_title="Kasauti", layout="wide")
@@ -596,6 +597,189 @@ def load_movers():
     return day, sides, reading
 
 
+# ------------------------------------------------- reading the news ---------
+@st.cache_resource(show_spinner="Reading a year of company news ...")
+def load_news_reading():
+    """Every saved announcement and deal read as good or bad, and what followed each kind."""
+    _, deals = load_flows()
+    table = newsview.read_all(load_news(), deals, fundamentals.load_quarterly())
+    reactions = newsview.past_reactions(table, load_model().prepared["last_close"],
+                                        load_nifty()["Close"])
+    return table, reactions
+
+
+@st.cache_resource(show_spinner="Reading the overnight filings ...")
+def load_overnight(since):
+    """Announcements and deals since `since`, read (opening the PDF where the title is vague)."""
+    announcements = load_news()
+    _, deals = load_flows()
+    return newsview.read_all(announcements[announcements["time"] >= since],
+                             deals[deals["date"] >= since.normalize()],
+                             fundamentals.load_quarterly(), read_pdfs=True)
+
+
+def _india_now():
+    return pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
+
+
+def _model_word(symbol, ranking, in_trend):
+    if symbol not in ranking.index:
+        return "not scored"
+    rank = int(ranking.index.get_loc(symbol)) + 1
+    view = today.model_view(float(ranking.loc[symbol, "score"]), bool(in_trend.get(symbol, False)))
+    return f"{view} (rank {rank})"
+
+
+def before_open_section(ranking, in_trend, held, weekly_symbols):
+    """Today page: what happened since yesterday's close, and stocks likely to move at the open."""
+    now = _india_now()
+    nifty = load_nifty()
+    since = premarket.last_close_time(nifty.index, now)
+    morning = now.weekday() < 5 and 6 <= now.hour < 10
+    markets = premarket.load_markets()
+    moves = premarket.global_moves(markets, since)
+    guess, reasons = premarket.opening_guess(moves)
+    reading, reactions = load_news_reading()
+    overnight = load_overnight(since)
+    if len(overnight):
+        overnight = overnight.assign(lean=[newsview.learned_lean(group, lean, reactions)
+                                           for group, lean in zip(overnight["group"],
+                                                                  overnight["lean"])])
+    symbols = list(data.load_universe()["Symbol"])
+    preopen = premarket.load_preopen(now)
+    up = premarket.preopen_movers(preopen, symbols, "up")
+    down = premarket.preopen_movers(preopen, symbols, "down")
+    industry = load_model().industry
+    sectors = premarket.sector_effects(moves, industry)
+    likely = premarket.stock_list(overnight, sectors, up, down)
+    likely = likely[likely["symbol"].isin(set(symbols))]
+    mine = set(held) | set(weekly_symbols)
+    warnings = likely[likely["symbol"].isin(mine)]
+
+    title = (f"Before the open: {guess}. {int((likely['direction'] > 0).sum())} likely up, "
+             f"{int((likely['direction'] < 0).sum())} likely down"
+             + (f", {len(warnings)} of your stocks affected" if len(warnings) else "")
+             + " (not part of the model)")
+    with st.expander(title, expanded=morning):
+        ui.section_note(f"Everything since the close on {since:%a %d %b, %I:%M %p}: global "
+                        "markets, company filings with NSE and NSE's pre-open prices. For "
+                        "understanding the open only: not tested, not a buy or sell signal.")
+        if st.button("Refresh before-open data", key="premarket_refresh",
+                     help="Global markets, overnight announcements and NSE pre-open prices. "
+                          "Under a minute. Runs by itself at 9:10 am on weekdays."):
+            bar = st.progress(0.0, text="Starting ...")
+
+            def show_progress(step, done, total):
+                bar.progress(min(1.0, done / max(total, 1)), text=f"{step}: {done} of {total}")
+
+            try:
+                result = update.run_premarket(show_progress)
+                st.session_state["update_note"] = (
+                    f"Before-open data refreshed in {result['seconds']} s. "
+                    f"{result['news_added']} new announcements. "
+                    + ("NSE pre-open prices saved." if result["preopen"] else
+                       "NSE pre-open prices come after 9:08 am."))
+            except Exception as error:
+                st.session_state["update_note"] = f"The refresh stopped: {error}"
+            st.cache_resource.clear()
+            st.rerun()
+
+        st.markdown(f"**{guess}.** " + ("; ".join(reasons) + "." if reasons else
+                                         "No big global moves since the close."))
+        for line in premarket.sector_summary(sectors):
+            st.markdown(f"- {line}")
+        if len(moves):
+            st.dataframe(pd.DataFrame({
+                "Market": moves["market"], "Change %": moves["change_%"],
+                "As of": moves["day"].dt.strftime("%a %d %b")}),
+                hide_index=True, use_container_width=True)
+        for row in warnings.itertuples():
+            which = "you hold it" if row.symbol in set(held) else "on this week's list"
+            text = (f"**{row.symbol}** ({which}): likely to open "
+                    f"{'up' if row.direction > 0 else 'down'}. {row.reasons[0]}")
+            (st.success if row.direction > 0 else st.warning)(text)
+        if preopen is None:
+            st.caption("NSE's pre-open prices appear after 9:08 am on a trading day. "
+                       "Refresh then to see which stocks are set to open sharply up or down.")
+        up_tab, down_tab = st.tabs([f"Likely up ({int((likely['direction'] > 0).sum())})",
+                                    f"Likely down ({int((likely['direction'] < 0).sum())})"])
+        for tab, side in ((up_tab, 1), (down_tab, -1)):
+            with tab:
+                table = likely[likely["direction"] == side]
+                if len(table) == 0:
+                    ui.empty("Nothing found for this side.")
+                    continue
+                st.dataframe(pd.DataFrame({
+                    "Stock": table["symbol"],
+                    "Industry": [industry.get(symbol, "") for symbol in table["symbol"]],
+                    "Pre-open %": table["open_%"],
+                    "Why": [" | ".join(reasons) for reasons in table["reasons"]],
+                    "Model": [_model_word(symbol, ranking, in_trend) for symbol in table["symbol"]],
+                    "Filing": table["link"].replace("", None),
+                }), hide_index=True, use_container_width=True,
+                    column_config={
+                        "Filing": st.column_config.LinkColumn("Filing", display_text="open"),
+                        "Why": st.column_config.TextColumn(width="large")})
+        st.caption("Order: the pre-open price counts most, then clearly good or bad news, then "
+                   "industries that usually follow a global move (rules of thumb, for example "
+                   "IT with US tech). Whether a kind of news counts as good or bad is decided "
+                   "by what happened after it in the past year where there are enough cases.")
+
+
+def news_ideas_section(ranking, in_trend, close, trend, held, weekly_symbols):
+    """Today page: ideas from the news of the last few days, with the model's view."""
+    reading, reactions = load_news_reading()
+    buys, exits = newsview.ideas(reading, ranking, in_trend, close, trend.iloc[-1],
+                                 held=held, weekly=weekly_symbols, reactions=reactions)
+    title = (f"News ideas: {len(buys)} possible buys, {len(exits)} possible exits "
+             "(not tested)")
+    with st.expander(title):
+        ui.section_note("Company news of the last few days, read as good or bad, next to the "
+                        "model's view and the price since. Ideas only: the model's tested "
+                        "rules do not trade on news. Use them to understand a move, or if you "
+                        "decide to act on news yourself.")
+        buy_tab, exit_tab, past_tab = st.tabs([f"Possible buys ({len(buys)})",
+                                               f"Possible exits ({len(exits)})",
+                                               "What usually happens after news"])
+        for tab, table in ((buy_tab, buys), (exit_tab, exits)):
+            with tab:
+                if len(table) == 0:
+                    ui.empty("None at the moment.")
+                    continue
+                st.dataframe(pd.DataFrame({
+                    "Stock": table["symbol"],
+                    "News": table["label"],
+                    "When": pd.to_datetime(table["time"]).dt.strftime("%d %b %H:%M"),
+                    "Since news %": table["move_since_%"],
+                    "Model": [f"{view}" + (f" (rank {rank})" if rank else "")
+                              for view, rank in zip(table["view"], table["rank"])],
+                    "Idea": table["idea"],
+                    "What usually happened": table["history"],
+                    "Details": [today.short_news(text, 160) for text in table["what"]],
+                    "Filing": table["link"].replace("", None),
+                }), hide_index=True, use_container_width=True,
+                    column_config={
+                        "Filing": st.column_config.LinkColumn("Filing", display_text="open"),
+                        "Idea": st.column_config.TextColumn(width="large"),
+                        "Details": st.column_config.TextColumn(width="large")})
+        with past_tab:
+            if len(reactions) == 0:
+                ui.empty("Not enough saved news history yet.")
+            else:
+                st.dataframe(pd.DataFrame({
+                    "Kind of news": reactions["group"],
+                    "Past cases": reactions["cases"],
+                    f"Average move vs Nifty, {config.NEWS_REACTION_DAYS} days (%)":
+                        reactions["average_%"],
+                    "Beat Nifty (% of cases)": reactions["beat_nifty_%"],
+                }), hide_index=True, use_container_width=True)
+                st.caption("From a year of NSE announcements and prices: the close before the "
+                           "news became public to the close "
+                           f"{config.NEWS_REACTION_DAYS} trading days later, minus Nifty. "
+                           f"Kinds with at least {2 * config.NEWS_MIN_CASES} cases decide "
+                           "whether the news counts as good or bad in the ideas.")
+
+
 def movers_section():
     """Today page: the stocks with unusually heavy buying or selling, and why."""
     found = load_movers()
@@ -720,6 +904,10 @@ def today_page():
     ui.day_plan(headline, note, plan["market_level"], plan["market_note"])
     if plan["market_level"] != "strong":
         st.caption(plan["market_note"])
+
+    # ---- before the open: overnight news, global markets, pre-open prices ----
+    latest_trend = built.trading["in_trend"].iloc[-1]
+    before_open_section(plan["today"], latest_trend, held, set(weekly["symbol"]))
 
     show_what = st.session_state.get("_show", "Buy and sell")
     buy_symbols = set(buy_now["symbol"])
@@ -934,6 +1122,7 @@ def today_page():
 
     # ---- market movers: off the model, for understanding the crowd ----
     movers_section()
+    news_ideas_section(plan["today"], latest_trend, close, trend, held, set(weekly["symbol"]))
 
     # ---- record trades ----
     with st.expander("Record a trade, and your profit so far"):

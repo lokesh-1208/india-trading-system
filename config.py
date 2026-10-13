@@ -60,6 +60,8 @@ MARKET_SYMBOLS = {
     "USDINR": "INR=X",
     "BRENT": "BZ=F",
     "GOLD": "GC=F",
+    "SP500_FUTURES": "ES=F",     # trade almost round the clock: the US mood before India opens
+    "NASDAQ_FUTURES": "NQ=F",
 }
 BENCHMARK = "NIFTY50"
 
@@ -228,3 +230,20 @@ MOVERS_MIN_VOLUME_X = 2.0        # on at least 2x the stock's normal volume
 MOVERS_VOLUME_DAYS = 20          # normal volume = average of the previous 20 days
 MOVERS_PER_SIDE = 20             # how many stocks to show on each side
 MOVERS_SECTOR_MIN = 3            # this many movers in one industry = a sector move
+
+# --------------------------------------------- before the open (info only) ---
+PREMARKET_DIR = DATA_DIR / "premarket"
+PREOPEN_FILE = PREMARKET_DIR / "preopen.csv"     # NSE pre-open session, 9:00-9:08 am
+PREOPEN_MIN_PCT = 2.0            # set to open at least 2% up or down
+# A global move counts as worth mentioning from this size (%), others from 1%.
+PREMARKET_NOTABLE_PCT = {"USDINR": 0.4, "INDIAVIX": 5.0, "BRENT": 2.0, "GOLD": 1.5}
+
+# ------------------------------------------------- reading the news (ideas) --
+NEWS_PDF_DIR = DATA_DIR / "news" / "pdf_text"    # text of filings already read
+NEWS_RESULTS_GOOD = 0.15         # profit up 15% on a year ago = good results, down 15% = bad
+NEWS_DEAL_MIN_CRORE = 10         # bulk/block deals smaller than this are ignored
+NEWS_REACTION_DAYS = 3           # "what happened next" is measured over 3 trading days
+NEWS_MIN_CASES = 15              # fewer past cases than this: no average shown
+NEWS_IDEA_DAYS = 5               # news of the last 5 calendar days makes ideas
+NEWS_MAX_RUN_PCT = 8.0           # already up more than this since the news: too late
+ANNOUNCEMENT_HISTORY_DAYS = 365  # how far back saved announcements are filled in once

@@ -160,3 +160,45 @@ def update(symbols, today=None):
     config.ANNOUNCEMENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
     combined.to_csv(config.ANNOUNCEMENTS_FILE, index=False)
     return len(combined) - len(saved)
+
+
+def backfill(symbols, days=None, report=None, today=None):
+    """Fill in older announcements once, back to `days` days ago (week by week).
+
+    The normal update only adds new announcements. This goes the other way, from
+    the oldest saved announcement backwards, so the news reading has enough past
+    cases to measure what usually happened after each kind of news.
+    Returns the number of announcements added.
+    """
+    days = config.ANNOUNCEMENT_HISTORY_DAYS if days is None else days
+    today = dt.date.today() if today is None else today
+    saved = load()
+    oldest = saved["time"].min().date() if len(saved) else today
+    first_day = today - dt.timedelta(days=days)
+    if oldest <= first_day + dt.timedelta(days=7):
+        return 0
+    browser = nse.session()
+    wanted = set(symbols)
+    pieces = []
+    weeks = max(1, (oldest - first_day).days // 7 + 1)
+    last = oldest
+    done = 0
+    while last > first_day:
+        day = max(first_day, last - dt.timedelta(days=6))
+        try:
+            raw = nse.get_json(browser, "/api/corporate-announcements", index="equities",
+                               from_date=day.strftime("%d-%m-%Y"),
+                               to_date=last.strftime("%d-%m-%Y"))
+            pieces.append(to_rows(raw, wanted))
+        except Exception:
+            pass                                   # a missed week is filled next time
+        last = day - dt.timedelta(days=1)
+        done += 1
+        if report is not None:
+            report("Older announcements", min(done, weeks), weeks)
+    if not pieces:
+        return 0
+    combined = merge(saved, pd.concat(pieces, ignore_index=True), today)
+    config.ANNOUNCEMENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(config.ANNOUNCEMENTS_FILE, index=False)
+    return len(combined) - len(saved)

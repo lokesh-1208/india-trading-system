@@ -17,7 +17,7 @@ import time
 import pandas as pd
 
 import config
-from trading import data, fundamentals, flows, gaps, news, shareholding, shorts
+from trading import data, fundamentals, flows, gaps, news, premarket, shareholding, shorts
 
 BATCH = 60
 
@@ -63,6 +63,10 @@ def update_prices(report, full=None):
     Returns (failed markets, stocks without data, summary of what was added).
     """
     failed_market = data.update_markets(report)
+    try:
+        gaps.fill_index_days()          # Nifty or VIX days Yahoo left out, from NSE
+    except Exception:
+        pass
     symbols = data.all_symbols()
     if full is None:
         full = full_download_is_due()
@@ -175,6 +179,8 @@ def run_update(include_company_data=None, report=None, full_prices=None):
     report("Company announcements", 0, 1)
     try:
         summary["news_added"] = news.update(list(data.load_universe()["Symbol"]))
+        # Once: a year of older announcements, so the news reading has history.
+        news.backfill(data.all_symbols(), report=report)
     except Exception as error:
         summary["news_problem"] = str(error)
     try:
@@ -215,3 +221,42 @@ def describe_prices(added):
         text += (f" {len(added['need_full_history'])} stocks had a split, bonus or big "
                  "dividend; their history was downloaded again.")
     return text
+
+
+# ----------------------------------------------------------- the morning ----
+def run_premarket(report=None, now=None):
+    """Before the open: global markets, overnight announcements, NSE pre-open prices.
+
+    Quick (well under a minute). Stock prices are not touched. The NSE pre-open
+    prices exist from 9:08 am; before that only the overnight news and global
+    markets are refreshed.
+    Returns a short summary as a dictionary.
+    """
+    report = data._print_progress if report is None else report
+    now = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None) if now is None \
+        else pd.Timestamp(now)
+    started = time.time()
+    summary = {"failed_markets": [], "news_added": 0, "news_problem": None,
+               "preopen": False, "preopen_problem": None}
+    summary["failed_markets"] = data.update_markets(report)
+    try:
+        gaps.fill_index_days()
+    except Exception:
+        pass
+    report("Overnight announcements", 0, 1)
+    try:
+        summary["news_added"] = news.update(list(data.load_universe()["Symbol"]))
+    except Exception as error:
+        summary["news_problem"] = str(error)
+    report("Overnight announcements", 1, 1)
+    in_session = now.weekday() < 5 and \
+        (9, 0) <= (now.hour, now.minute) <= (15, 30)
+    if in_session:
+        report("NSE pre-open prices", 0, 1)
+        table = premarket.download_preopen()
+        summary["preopen"] = table is not None
+        if table is None:
+            summary["preopen_problem"] = "NSE did not answer"
+        report("NSE pre-open prices", 1, 1)
+    summary["seconds"] = round(time.time() - started)
+    return summary

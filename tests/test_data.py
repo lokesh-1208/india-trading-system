@@ -69,3 +69,15 @@ def test_current_member_missing_from_history_is_added_from_a_year_ago():
 def test_members_already_in_the_history_are_not_added_twice():
     added = data.add_listed_members(MEMBERSHIP, ["AAA", "BBB"], today="2026-10-13")
     assert len(added) == len(MEMBERSHIP)
+
+
+def test_a_download_missing_the_last_saved_day_keeps_that_day(tmp_path):
+    path = tmp_path / "NIFTY50.csv"
+    saved = pd.DataFrame({"Open": [1.0, 2.0, 3.0], "High": 1.0, "Low": 1.0, "Close": 1.0,
+                          "Volume": 0.0},
+                         index=pd.to_datetime(["2026-10-09", "2026-10-12", "2026-10-13"]))
+    saved.index.name = "Date"
+    saved.to_csv(path)
+    download = saved.iloc[:2]                     # Yahoo dropped 13 Oct
+    merged = data.keep_newer_days(download, path)
+    assert list(merged.index.strftime("%d")) == ["09", "12", "13"]

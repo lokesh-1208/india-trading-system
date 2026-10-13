@@ -189,6 +189,27 @@ def _print_progress(step, done, total):
     print(f"{step}: {done} of {total} done")
 
 
+def keep_newer_days(table, path):
+    """The new download plus any saved days after its last day.
+
+    Yahoo sometimes drops the latest day from a download (Nifty's 13 Oct 2026
+    vanished hours after it appeared). Days already saved after the new
+    download's last day are kept rather than thrown away.
+    """
+    if not path.exists() or len(table) == 0:
+        return table
+    try:
+        saved = pd.read_csv(path, index_col="Date", parse_dates=True)
+    except Exception:
+        return table
+    newer = saved[saved.index > table.index[-1]]
+    if len(newer) == 0:
+        return table
+    newer = newer.reindex(columns=table.columns)
+    newer.index.name = table.index.name
+    return pd.concat([table, newer]).sort_index()
+
+
 def _download_group(jobs, folder, label, report=_print_progress):
     """Download a list of (name, ticker) pairs into a folder. Returns failures.
 
@@ -207,7 +228,7 @@ def _download_group(jobs, folder, label, report=_print_progress):
             if table is None or len(table) == 0:
                 failed.append(name)
             else:
-                table.to_csv(folder / f"{name}.csv")
+                keep_newer_days(table, folder / f"{name}.csv").to_csv(folder / f"{name}.csv")
         report(label, min(first + BATCH_SIZE, len(jobs)), len(jobs))
         time.sleep(0.5)  # be polite to the free data source
     return failed

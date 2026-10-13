@@ -121,3 +121,14 @@ def test_same_bar_is_recognised_so_the_file_is_not_rewritten():
     assert gaps.same_bar(table, pd.Timestamp("2026-10-12"), same)
     assert not gaps.same_bar(table, pd.Timestamp("2026-10-12"), same.replace(100.0, 101.0))
     assert not gaps.same_bar(table, pd.Timestamp("2026-10-13"), same)
+
+
+def test_nse_index_file_gives_nifty_and_vix():
+    text = ("Index Name,Index Date,Open Index Value,High Index Value,Low Index Value,"
+            "Closing Index Value,Points Change,Change(%),Volume,Turnover (Rs. Cr.),P/E,P/B,"
+            "Div Yield\n"
+            "Nifty 50,13-10-2026,22364.15,22721.95,22288.45,22721.95,358.6,1.6,1,1,1,1,1\n"
+            "India VIX,13-10-2026,15.25,15.35,13.94,14.12,-1.13,-7.43,-,-,-,-,-\n")
+    values = gaps.parse_index_file(text)
+    assert values["Nifty 50"] == (22364.15, 22721.95, 22288.45, 22721.95)
+    assert values["India VIX"][3] == 14.12

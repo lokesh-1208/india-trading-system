@@ -322,3 +322,71 @@ def fill_missing_days(symbols=None, report=data._print_progress, today=None, qui
         add_rows(tables[symbol], new_rows).to_csv(config.PRICES_DIR / f"{symbol}.csv")
     summary["days"] = sorted({day for new_rows in rows.values() for day in new_rows})
     return summary
+
+
+# ------------------------------------------------------------ indices -------
+INDEX_URL = "https://nsearchives.nseindia.com/content/indices/ind_close_all_{day:%d%m%Y}.csv"
+INDEX_NAMES = {"NIFTY50": "Nifty 50", "INDIAVIX": "India VIX"}
+
+
+def parse_index_file(text):
+    """NSE's daily index file -> {index name: (open, high, low, close)}."""
+    table = pd.read_csv(io.StringIO(text))
+    table = table.set_index("Index Name")
+    columns = ["Open Index Value", "High Index Value", "Low Index Value", "Closing Index Value"]
+    result = {}
+    for name in INDEX_NAMES.values():
+        if name in table.index:
+            values = pd.to_numeric(table.loc[name, columns], errors="coerce")
+            if values.notna().all():
+                result[name] = tuple(float(value) for value in values)
+    return result
+
+
+def fill_index_days(today=None, lookback=LOOKBACK_DAYS):
+    """Fill weekdays missing from Nifty 50 and India VIX using NSE's daily index file.
+
+    Yahoo sometimes leaves out (or later drops) the latest day of an index. NSE
+    publishes every index's open, high, low and close each evening. A weekday
+    NSE has no file for was a holiday. Returns the days added.
+    """
+    today = india_today() if today is None else pd.Timestamp(today)
+    tables = {name: data.load_prices(name, config.MARKET_DIR) for name in INDEX_NAMES}
+    if any(table is None or len(table) == 0 for table in tables.values()):
+        return []
+    weekdays = pd.bdate_range(end=today, periods=lookback)
+    wanted = [day for day in weekdays
+              if any(day not in table.index and day > table.index[0]
+                     for table in tables.values())]
+    if not wanted:
+        return []
+    browser = _nse_browser()
+    added = []
+    for day in wanted:
+        saved = BHAVCOPY_DIR / f"indices_{day:%Y-%m-%d}.csv"
+        try:
+            if saved.exists():
+                text = saved.read_text(encoding="utf-8")
+            else:
+                if browser is None:
+                    return added
+                answer = browser.get(INDEX_URL.format(day=day), timeout=30)
+                if answer.status_code != 200 or "Index Name" not in answer.text[:50]:
+                    continue                     # a holiday, or not published yet
+                text = answer.text
+                BHAVCOPY_DIR.mkdir(parents=True, exist_ok=True)
+                saved.write_text(text, encoding="utf-8")
+            values = parse_index_file(text)
+        except Exception:
+            continue
+        for name, label in INDEX_NAMES.items():
+            table = tables[name]
+            if day in table.index or label not in values:
+                continue
+            bar = pd.Series(dict(zip(["Open", "High", "Low", "Close"], values[label]),
+                                 Volume=0.0))
+            tables[name] = add_rows(table, {day: bar})
+            added.append(day)
+    for name, table in tables.items():
+        table.to_csv(config.MARKET_DIR / f"{name}.csv")
+    return sorted(set(added))

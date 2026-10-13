@@ -7,7 +7,7 @@ button on the dashboard, so both always do exactly the same thing.
 import time
 
 import config
-from trading import data, fundamentals, flows, news, shareholding, shorts
+from trading import data, fundamentals, flows, gaps, news, shareholding, shorts
 
 BATCH = 60
 
@@ -37,9 +37,18 @@ def run_update(include_company_data=None, report=None):
         include_company_data = company_data_is_due()
 
     failed_market, failed_stocks = data.update_all(report)
+    # Yahoo sometimes leaves a whole trading day out; fill it from NSE's day file.
+    try:
+        filled = gaps.fill_missing_days(report=report)
+        fill_problem = None
+    except Exception as error:
+        filled, fill_problem = {"days": [], "from_nse": 0, "from_hourly": 0,
+                                "not_filled": 0}, str(error)
     summary = {
         "failed_markets": failed_market,
         "stocks_without_data": len(failed_stocks),
+        "missing_days": filled,
+        "missing_days_problem": fill_problem,
         "company_data_refreshed": False,
         "shareholding_problem": None,
         "news_added": 0,

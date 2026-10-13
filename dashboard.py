@@ -965,6 +965,9 @@ if st.sidebar.button("Update data now", type="primary", use_container_width=True
             note += " No data for: " + ", ".join(summary["failed_markets"]) + "."
         if summary["shareholding_problem"]:
             note += " Shareholding could not be refreshed."
+        if summary["missing_days"]["days"]:
+            days = ", ".join(f"{day:%d %b}" for day in summary["missing_days"]["days"])
+            note += f" Yahoo was missing {days}; filled in from NSE."
         if summary["news_problem"] or summary["flows_problem"]:
             note += " NSE announcements or FII/DII figures could not be downloaded."
         else:

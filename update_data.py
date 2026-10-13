@@ -25,6 +25,13 @@ if summary["failed_markets"]:
     print(f"PROBLEM: no data for these markets: {', '.join(summary['failed_markets'])}")
 print(f"Stocks without data on Yahoo: {summary['stocks_without_data']}")
 print("These are mostly companies that were delisted, merged or renamed.")
+gap = summary["missing_days"]
+if summary["missing_days_problem"]:
+    print(f"Could not fill days missing on Yahoo: {summary['missing_days_problem']}")
+elif gap["days"]:
+    days = ", ".join(f"{day:%d %b}" for day in gap["days"])
+    print(f"Days missing on Yahoo: {days}. Filled {gap['from_nse']} stock-days from NSE, "
+          f"{gap['from_hourly']} from Yahoo hourly bars; {gap['not_filled']} could not be filled.")
 if summary["company_data_refreshed"]:
     print("Company results and shareholding refreshed.")
 else:

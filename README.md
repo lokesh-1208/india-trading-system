@@ -25,12 +25,34 @@ The first download takes a few minutes.
 
 ## Daily use
 
-1. **Each evening after 6 pm:** press **Update data now** in the dashboard sidebar (or let
-   the scheduled update do it, see the end of this file).
-2. **Each morning:** open the dashboard (`start_dashboard.bat`, or
-   `streamlit run dashboard.py`) and read the **Today** page.
-3. **After you buy or sell:** record it under **My real trades** on the same page. From then
-   on the page tells you each day whether to hold it or sell it.
+1. **Open the app:** double-click `start_kasauti.bat`. Kasauti opens in your browser at
+   http://127.0.0.1:8765. Keep the black window open while you use it.
+2. **Each evening after 6 pm:** press **Update data** on the Today page (or let the
+   scheduled update do it, see the end of this file).
+3. **Each morning:** read the **Today** page; **Before open** shows what happened overnight.
+4. **After you buy or sell:** record it under **Trades**. From then on the Today page tells
+   you each day whether to hold it or sell it.
+
+The older Streamlit dashboard (`start_dashboard.bat`) still works and shows the same data.
+
+## The web app
+
+| Page | What it shows |
+|---|---|
+| Today | What to do: buy cards from the weekly list (price bar with stop-loss, last price and buy limit, number of shares), your stocks with Hold or Sell, the rest of the week's list with why it is not buyable, the week tracker, and cards for Before the open, News ideas and Market mood. |
+| Before open | Global markets since our close, overnight NSE filings, NSE pre-open prices (after 9:08 am), and stocks likely to open up or down. For context. |
+| News & movers | News ideas with the model's view, the stocks with heavy buying or selling, and what usually happened after each kind of news. For context. |
+| Market | The model's market checks, world markets, institutions' buying, and the backtest against Nifty. |
+| Stocks | One stock: candlestick chart (TradingView lightweight-charts) with the 20-day average, buy limit and stop-loss; the model's view; ROCE, cash flow, scorecard, owners, news, reports. |
+| Trades | Record buys and sells; profit after charges. |
+
+How it is built: `server/` is a small FastAPI server that answers the page's questions
+from the existing `trading/` code; `web/` is the page, written in React and TypeScript.
+The built page (`web/dist`) is kept in the repository, so Node.js is only needed to change
+the page (`cd web`, `npm install`, `npm run build`; `npm run dev` for live editing with
+the server running). Tests: `python -m pytest` for the server and model, and
+`npx playwright test` in `web/` for the page (it uses saved example answers, so it needs
+no data).
 
 ## The Today page
 
@@ -224,8 +246,9 @@ member from one year ago, so it appears in today's list while older backtests le
 
 ## Without typing commands (Windows)
 
-- `start_dashboard.bat`: double-click to open the dashboard. Right-click it and choose
+- `start_kasauti.bat`: double-click to open the app. Right-click it and choose
   "Send to > Desktop (create shortcut)" to get a desktop icon.
+- `start_dashboard.bat`: the older Streamlit dashboard.
 - `schedule_daily_update.bat`: double-click once. Windows will then download the latest
   data every weekday at 6:30 pm, and refresh the before-the-open data at 9:10 am (the
   laptop must be on). The log is `reports/update_log.txt`.

@@ -63,9 +63,9 @@ export default function PriceChart({ data, levels, theme, height = 400 }: {
     role="img" aria-label={`${data.symbol} price chart with the 20-day average`} />;
 }
 
-export function LineChart({ series, theme, height = 260 }: {
+export function LineChart({ series, theme, height = 260, unit = "rupees", label = "Growth of the model against Nifty" }: {
   series: { name: string; color: string; points: { time: string; value: number }[] }[];
-  theme: string; height?: number;
+  theme: string; height?: number; unit?: "rupees" | "percent"; label?: string;
 }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -77,7 +77,8 @@ export function LineChart({ series, theme, height = 260 }: {
       grid: { vertLines: { visible: false }, horzLines: { color: css("--line") } },
       rightPriceScale: { borderColor: css("--line") },
       timeScale: { borderColor: css("--line") },
-      localization: { priceFormatter: (value: number) => `₹${Math.round(value).toLocaleString("en-IN")}` },
+      localization: { priceFormatter: (value: number) => unit === "percent"
+        ? `${Math.round(value)}%` : `₹${Math.round(value).toLocaleString("en-IN")}` },
     });
     for (const line of series) {
       const drawn = chart.addLineSeries({ color: line.color.startsWith("--") ? css(line.color) : line.color,
@@ -86,6 +87,6 @@ export function LineChart({ series, theme, height = 260 }: {
     }
     chart.timeScale().fitContent();
     return () => chart.remove();
-  }, [series, theme, height]);
-  return <div ref={box} style={{ height }} role="img" aria-label="Growth of the model against Nifty" />;
+  }, [series, theme, height, unit]);
+  return <div ref={box} style={{ height }} role="img" aria-label={label} />;
 }

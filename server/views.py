@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd
 
 import config
-from trading import (company, data, journal, model, movers, news, newsview, picks, premarket,
-                     today, update)
+from trading import (breadth, company, data, journal, model, movers, news, newsview, picks,
+                     premarket, today, update)
 
 from server.store import STORE
 
@@ -329,6 +329,22 @@ def market_page():
     from trading import flows as flow_module
     net = flow_module.daily_net(flow_table) if len(flow_table) else pd.DataFrame()
     fii = records(net.reset_index().tail(15)) if len(net) else []
+    # breadth: how many stocks are rising, and which industries lead
+    close = built.prepared["last_close"]
+    wide = breadth.breadth(close, built.prepared["liquid"]).dropna(how="all")
+    width = None
+    if len(wide):
+        now, week = wide.iloc[-1], wide.iloc[-6] if len(wide) > 5 else wide.iloc[0]
+        width = {"day": wide.index[-1],
+                 "above_20": now["above_20_ema_%"], "above_20_week_ago": week["above_20_ema_%"],
+                 "above_200": now["above_200_day_%"],
+                 "above_200_week_ago": week["above_200_day_%"],
+                 "series": [{"time": day.strftime("%Y-%m-%d"), "above_20": row["above_20_ema_%"],
+                             "above_200": row["above_200_day_%"]}
+                            for day, row in wide.iterrows()]}
+    sectors = breadth.sector_strength(STORE.ranking(), close, STORE.in_trend(), built.industry)
+    sectors = sectors.reset_index()
+
     result, summary, by_year = STORE.history()
     equity = result["equity"]
     nifty = STORE.nifty()["Close"].reindex(equity.index).ffill()
@@ -337,7 +353,8 @@ def market_page():
         "level": level, "note": note,
         "checks": [{"name": name, "passed": None if pd.isna(passed) else bool(passed)}
                    for name, passed in plan_checks.items()],
-        "markets": markets, "fii_dii": fii,
+        "markets": markets, "fii_dii": fii, "breadth": width,
+        "sectors": records(sectors),
         "history": {"summary": summary,
                     "by_year": [{"year": int(year), "model": row["strategy"],
                                  "nifty": row["nifty"]} for year, row in by_year.iterrows()],

@@ -56,3 +56,14 @@ test("recording a buy sends the order to the server", async ({ page }) => {
   expect(posts[0].path).toBe("trades/buy");
   expect(posts[0].body).toMatchObject({ symbol: "INFY", price: 1500, quantity: 5 });
 });
+
+
+test("market page shows breadth and sector strength", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/market");
+  await expect(page.getByRole("heading", { name: "Market breadth" })).toBeVisible();
+  await expect(page.getByText("Above their 20-day average")).toBeVisible();
+  await expect(page.getByRole("img", { name: /Share of stocks above their averages/ })).toBeVisible();
+  const first = fixture("market").sectors[0].industry;
+  await expect(page.getByRole("cell", { name: first, exact: true })).toBeVisible();
+});

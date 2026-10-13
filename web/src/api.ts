@@ -104,6 +104,11 @@ export type Market = {
   level: string; note: string; checks: { name: string; passed: boolean | null }[];
   markets: { name: string; value: number; change: number }[];
   fii_dii: { date: string; FII: number | null; DII: number | null }[];
+  breadth: null | {
+    day: string; above_20: number; above_20_week_ago: number; above_200: number; above_200_week_ago: number;
+    series: { time: string; above_20: number; above_200: number }[];
+  };
+  sectors: { industry: string; stocks: number; "month_%": number; "above_ema_%": number; score: number }[];
   history: {
     summary: Record<string, number | string>;
     by_year: { year: number; model: number; nifty: number }[];

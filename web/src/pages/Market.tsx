@@ -5,6 +5,14 @@ import { Check, Loading, Panel, Problem, Tag } from "../components/ui";
 import { LineChart } from "../components/PriceChart";
 import { num, pct, share } from "../format";
 
+function breadthNote(above20: number, above200: number) {
+  const short = above20 >= 60 ? "Most stocks are rising in the short term" : above20 <= 40
+    ? "Most stocks are falling in the short term" : "Stocks are split in the short term";
+  const long = above200 >= 60 ? "and most are in long-term uptrends." : above200 <= 40
+    ? "and most are below their long-term average." : "and about half are in long-term uptrends.";
+  return `${short}, ${long} Broad rises (many stocks above their averages) are healthier than an index lifted by a few big names.`;
+}
+
 export default function MarketPage() {
   const { version, theme } = useApp();
   const { data, error, reload } = useApi<Market>("/api/market", version);
@@ -29,6 +37,56 @@ export default function MarketPage() {
 
       <div className="row">
         <div className="main-col">
+          {data.breadth ? (
+            <Panel title="Market breadth" aside="Nifty 500 stocks that trade enough, last 6 months">
+              <div className="grid-tiles">
+                <div className="tile"><span className="name">Above their 20-day average</span>
+                  <span className="value num">{Math.round(data.breadth.above_20)}%</span>
+                  <span className={`note ${data.breadth.above_20 >= data.breadth.above_20_week_ago ? "up" : "down"}`}>
+                    {Math.round(data.breadth.above_20_week_ago)}% a week ago</span></div>
+                <div className="tile"><span className="name">Above their 200-day average</span>
+                  <span className="value num">{Math.round(data.breadth.above_200)}%</span>
+                  <span className={`note ${data.breadth.above_200 >= data.breadth.above_200_week_ago ? "up" : "down"}`}>
+                    {Math.round(data.breadth.above_200_week_ago)}% a week ago</span></div>
+              </div>
+              <LineChart theme={theme} unit="percent" height={220} label="Share of stocks above their averages, last 6 months" series={[
+                { name: "Above 20-day", color: "--blue", points: data.breadth.series.map((point) => ({ time: point.time, value: point.above_20 })) },
+                { name: "Above 200-day", color: "--warn", points: data.breadth.series.map((point) => ({ time: point.time, value: point.above_200 })) },
+              ]} />
+              <p className="small muted">{breadthNote(data.breadth.above_20, data.breadth.above_200)}</p>
+            </Panel>
+          ) : null}
+
+          {data.sectors.length ? (
+            <Panel title="Sector strength" aside="industries with 3 or more scored stocks, strongest month first">
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Industry</th><th className="right">Stocks</th><th className="right">1 month</th>
+                    <th>Above 20-day average</th><th className="right">Model score</th></tr></thead>
+                  <tbody>
+                    {data.sectors.map((row) => (
+                      <tr key={row.industry}>
+                        <td>{row.industry}</td>
+                        <td className="right num muted">{row.stocks}</td>
+                        <td className={`right num ${row["month_%"] >= 0 ? "up" : "down"}`}>{pct(row["month_%"])}</td>
+                        <td style={{ minWidth: 160 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div className="track" style={{ flex: 1, height: 8, borderRadius: 4, background: "var(--track)" }}>
+                              <div style={{ width: `${row["above_ema_%"]}%`, height: 8, borderRadius: 4,
+                                background: row["above_ema_%"] >= 50 ? "var(--up)" : "var(--muted)" }} />
+                            </div>
+                            <span className="num small" style={{ width: 40, textAlign: "right" }}>{Math.round(row["above_ema_%"])}%</span>
+                          </div>
+                        </td>
+                        <td className="right num">{Math.round(row.score)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Panel>
+          ) : null}
+
           <Panel title="How the model did in the past" aside={`${summary.period_start} to ${summary.period_end}, after charges`}>
             <div className="grid-tiles">
               <div className="tile"><span className="name">Growth per year</span>

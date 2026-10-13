@@ -34,6 +34,18 @@ MEMBERSHIP_SOURCE = (
     "https://raw.githubusercontent.com/rishabhjain0295-web/"
     "nifty500-momentum-backtest/master/data/"
 )
+# A stock on NSE's current Nifty 500 list that the history file leaves out is
+# counted as a member from this many days ago (its older history is unknown).
+MISSING_MEMBER_START_DAYS = 365
+
+# The full price history is downloaded from Yahoo once a week. On other days
+# only the new days are added from NSE's day file, which is much faster.
+FULL_PRICES_REFRESH_DAYS = 7
+FULL_PRICES_MARKER = DATA_DIR / "prices_full_download.txt"   # date of the last full download
+YAHOO_NO_DATA_FILE = DATA_DIR / "yahoo_no_data.txt"   # delisted stocks; retried weekly only
+# NSE's previous close differing from the saved close by more than this means a
+# split, bonus or big dividend: that stock's full history is downloaded again.
+CORPORATE_ACTION_GAP = 0.01
 
 # Name we use -> Yahoo Finance ticker
 MARKET_SYMBOLS = {
@@ -48,6 +60,8 @@ MARKET_SYMBOLS = {
     "USDINR": "INR=X",
     "BRENT": "BZ=F",
     "GOLD": "GC=F",
+    "SP500_FUTURES": "ES=F",     # trade almost round the clock: the US mood before India opens
+    "NASDAQ_FUTURES": "NQ=F",
 }
 BENCHMARK = "NIFTY50"
 
@@ -93,7 +107,21 @@ ANNUAL_FILE = FUNDAMENTALS_DIR / "annual.csv"          # yearly results per comp
 QUARTERLY_FILE = FUNDAMENTALS_DIR / "quarterly.csv"    # quarterly results
 RESULTS_DATES_FILE = FUNDAMENTALS_DIR / "results_dates.csv"
 DIVIDENDS_FILE = FUNDAMENTALS_DIR / "dividends.csv"
-FUNDAMENTALS_REFRESH_DAYS = 7    # company numbers change slowly; refresh weekly
+FUNDAMENTALS_REFRESH_DAYS = 7    # shareholding filings are checked once a week
+RESULTS_FETCHED_FILE = FUNDAMENTALS_DIR / "results_fetched.csv"   # when each company was fetched
+# Company results from NSE's own filings (trading/filings.py), preferred to Yahoo.
+NSE_RESULTS_FILE = FUNDAMENTALS_DIR / "nse_results.csv"     # every filing read, per period
+NSE_TRIED_FILE = FUNDAMENTALS_DIR / "nse_filings_tried.csv" # filings already downloaded
+NSE_CHECKED_FILE = FUNDAMENTALS_DIR / "nse_checked.csv"     # when each company's list was checked
+FILINGS_BACKFILL_SECONDS = 240          # first download: at most this long per daily update
+FILINGS_START = "2016-03-31"            # NSE's machine-readable filings start about here
+FILINGS_ALL_QUARTERS_FROM = "2020-03-31"  # every quarter from here; before, March and Sept only
+FILINGS_WORKERS = 6                     # companies downloaded at the same time
+FILINGS_PAUSE = 0.2                     # seconds between two downloads, to be polite to NSE
+# Company results are downloaded only for companies that are due (see
+# fundamentals.due_symbols): just announced results, or not checked for a month.
+RESULTS_WATCH_DAYS = 21          # keep checking this long after a results announcement
+RESULTS_FULL_REFRESH_DAYS = 30   # every company is checked again at least this often
 
 # A year's results become public some weeks after the year ends. In a backtest
 # we only use them from this many days after the year end, never earlier.
@@ -111,13 +139,15 @@ FINANCIAL_INDUSTRY = "Financial Services"
 USE_RESULTS_BLOCK = True
 RESULTS_BLOCK_DAYS = 5
 
-# Company scorecard: ten yes/no checks shown on the company card and in the
+# Company scorecard: twelve yes/no checks shown on the company card and in the
 # daily report. The score is the number of checks passed. These thresholds are
 # common rules of thumb. They have not been proven by a backtest.
 SCORE_MIN_GROWTH = 0.10              # sales and profit growth of at least 10%
 SCORE_MIN_RETURN_ON_EQUITY = 0.15
 SCORE_MIN_NET_MARGIN = 0.10
 SCORE_MAX_DEBT_TO_EQUITY = 1.0       # not applied to banks and finance companies
+SCORE_MIN_ROCE = 0.15                # return on capital employed (not for banks and finance)
+SCORE_MIN_CASH_CONVERSION = 0.8      # cash from operations / profit over 3 years (not finance)
 
 # ------------------------------------------------------ shareholding --------
 # Who owns each company: promoters, foreign funds (FII), Indian funds (DII,
@@ -125,6 +155,8 @@ SCORE_MAX_DEBT_TO_EQUITY = 1.0       # not applied to banks and finance companie
 # companies make to NSE.
 SHAREHOLDING_FILE = FUNDAMENTALS_DIR / "shareholding.csv"
 FUND_HOLDERS_FILE = FUNDAMENTALS_DIR / "mutual_fund_holders.csv"
+PLEDGE_FILE = FUNDAMENTALS_DIR / "pledges.csv"   # % of promoter shares pledged (NSE)
+PLEDGE_RED_FLAG_PCT = 25.0       # more of the promoters' shares pledged than this: warning
 SHAREHOLDING_QUARTERS = 20       # about 5 years. Each quarter is downloaded only once,
                                  # so the first run is long and later runs are quick.
 NSE_SITE = "https://www.nseindia.com"
@@ -202,3 +234,29 @@ FII_DII_FILE = DATA_DIR / "flows" / "fii_dii.csv"              # daily buying an
 LARGE_DEALS_FILE = DATA_DIR / "flows" / "large_deals.csv"      # bulk and block deals
 ANNOUNCEMENT_DAYS_FIRST_RUN = 10     # how far back the first download goes
 ANNOUNCEMENT_DAYS_KEPT = 400         # older announcements are dropped from the file
+
+# ------------------------------------------------- market movers (info only) --
+# The "Market movers" section on the Today page: stocks with unusually heavy
+# buying or selling on the last day. Not part of the model; no buy or sell.
+MOVERS_MIN_MOVE_PCT = 2.0        # price moved at least 2% up or down
+MOVERS_MIN_VOLUME_X = 2.0        # on at least 2x the stock's normal volume
+MOVERS_VOLUME_DAYS = 20          # normal volume = average of the previous 20 days
+MOVERS_PER_SIDE = 20             # how many stocks to show on each side
+MOVERS_SECTOR_MIN = 3            # this many movers in one industry = a sector move
+
+# --------------------------------------------- before the open (info only) ---
+PREMARKET_DIR = DATA_DIR / "premarket"
+PREOPEN_FILE = PREMARKET_DIR / "preopen.csv"     # NSE pre-open session, 9:00-9:08 am
+PREOPEN_MIN_PCT = 2.0            # set to open at least 2% up or down
+# A global move counts as worth mentioning from this size (%), others from 1%.
+PREMARKET_NOTABLE_PCT = {"USDINR": 0.4, "INDIAVIX": 5.0, "BRENT": 2.0, "GOLD": 1.5}
+
+# ------------------------------------------------- reading the news (ideas) --
+NEWS_PDF_DIR = DATA_DIR / "news" / "pdf_text"    # text of filings already read
+NEWS_RESULTS_GOOD = 0.15         # profit up 15% on a year ago = good results, down 15% = bad
+NEWS_DEAL_MIN_CRORE = 10         # bulk/block deals smaller than this are ignored
+NEWS_REACTION_DAYS = 3           # "what happened next" is measured over 3 trading days
+NEWS_MIN_CASES = 15              # fewer past cases than this: no average shown
+NEWS_IDEA_DAYS = 5               # news of the last 5 calendar days makes ideas
+NEWS_MAX_RUN_PCT = 8.0           # already up more than this since the news: too late
+ANNOUNCEMENT_HISTORY_DAYS = 365  # how far back saved announcements are filled in once

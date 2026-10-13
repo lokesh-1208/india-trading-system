@@ -3,6 +3,7 @@
 import math
 
 import pandas as pd
+import pytest
 
 from trading import company
 
@@ -129,9 +130,23 @@ def test_scorecard_counts_the_checks_passed():
     card["industry_pe"] = 25.0
     checks = dict(company.scorecard(card))
     # growth is exactly 10%, quarter profit is up, ROE 19%, margin 10%, debt 0.2,
-    # PE 20.3 is below 25, and it pays a dividend: all ten pass
-    assert all(checks.values())
+    # PE 20.3 is below 25, and it pays a dividend: all ten of those pass. ROCE and
+    # cash conversion need NSE figures this test company does not have: unknown.
+    known = {name: passed for name, passed in checks.items() if passed is not None}
+    assert len(known) == 10 and all(known.values())
     assert company.score(card) == 10
+    assert len(checks) == 12
+
+
+def test_roce_and_cash_conversion_from_nse_figures():
+    years = pd.DataFrame({
+        "period_end": pd.to_datetime(["2024-03-31", "2025-03-31", "2026-03-31"]),
+        "net_income": [100.0, 110.0, 120.0], "cfo": [90.0, 100.0, 110.0],
+        "pbt": [140.0, 150.0, 160.0], "finance_costs": [10.0, 10.0, 20.0],
+        "equity": [800.0, 850.0, 900.0], "total_debt": [100.0, 100.0, 300.0]})
+    roce, conversion = company._roce_and_cash(years)
+    assert roce == pytest.approx(180.0 / 1200.0)          # (160 + 20) / (900 + 300)
+    assert conversion == pytest.approx(300.0 / 330.0)
 
 
 def test_scorecard_marks_unknown_figures_as_unknown_not_failed():

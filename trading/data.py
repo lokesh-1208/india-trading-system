@@ -50,7 +50,34 @@ def load_membership():
     """
     if not config.MEMBERSHIP_FILE.exists():
         return None
-    return pd.read_csv(config.MEMBERSHIP_FILE, parse_dates=["start", "end"])
+    membership = pd.read_csv(config.MEMBERSHIP_FILE, parse_dates=["start", "end"])
+    return add_listed_members(membership, load_index_list())
+
+
+def load_index_list():
+    """Symbols on NSE's current Nifty 500 list, or an empty list if not downloaded."""
+    if not config.INDUSTRY_FILE.exists():
+        return []
+    return list(pd.read_csv(config.INDUSTRY_FILE)["Symbol"].dropna().unique())
+
+
+def add_listed_members(membership, listed, today=None):
+    """Add stocks that NSE lists in the index today but the history file misses.
+
+    The membership history comes from a public project and sometimes leaves out
+    a current member (ITC, Tata Power and Federal Bank were missing in Oct 2026).
+    Such a stock is added as a member from config.MISSING_MEMBER_START_DAYS ago.
+    Its older history stays unknown, so backtests over earlier years do not
+    count it, which keeps them free of hindsight.
+    """
+    open_members = set(membership.loc[membership["end"].isna(), "symbol"])
+    missing = sorted(set(listed) - open_members)
+    if not missing:
+        return membership
+    today = pd.Timestamp.today().normalize() if today is None else pd.Timestamp(today)
+    start = today - pd.Timedelta(days=config.MISSING_MEMBER_START_DAYS)
+    extra = pd.DataFrame({"symbol": missing, "start": start, "end": pd.NaT})
+    return pd.concat([membership, extra], ignore_index=True)
 
 
 def membership_mask(symbol, dates, membership):
@@ -162,6 +189,27 @@ def _print_progress(step, done, total):
     print(f"{step}: {done} of {total} done")
 
 
+def keep_newer_days(table, path):
+    """The new download plus any saved days after its last day.
+
+    Yahoo sometimes drops the latest day from a download (Nifty's 13 Oct 2026
+    vanished hours after it appeared). Days already saved after the new
+    download's last day are kept rather than thrown away.
+    """
+    if not path.exists() or len(table) == 0:
+        return table
+    try:
+        saved = pd.read_csv(path, index_col="Date", parse_dates=True)
+    except Exception:
+        return table
+    newer = saved[saved.index > table.index[-1]]
+    if len(newer) == 0:
+        return table
+    newer = newer.reindex(columns=table.columns)
+    newer.index.name = table.index.name
+    return pd.concat([table, newer]).sort_index()
+
+
 def _download_group(jobs, folder, label, report=_print_progress):
     """Download a list of (name, ticker) pairs into a folder. Returns failures.
 
@@ -180,31 +228,42 @@ def _download_group(jobs, folder, label, report=_print_progress):
             if table is None or len(table) == 0:
                 failed.append(name)
             else:
-                table.to_csv(folder / f"{name}.csv")
+                keep_newer_days(table, folder / f"{name}.csv").to_csv(folder / f"{name}.csv")
         report(label, min(first + BATCH_SIZE, len(jobs)), len(jobs))
         time.sleep(0.5)  # be polite to the free data source
     return failed
 
 
-def update_all(report=_print_progress):
-    """Refresh the membership list, then download every index and stock.
+def update_markets(report=_print_progress):
+    """Refresh the membership list and download every index (quick: 11 tickers).
 
-    Each run downloads the full history again. Yahoo re-adjusts old prices
-    after every dividend and split, so appending only new days would slowly
-    corrupt the files.
-
-    Returns (failed market names, stock symbols Yahoo has no data for).
+    Returns the market names Yahoo had no data for.
     """
     config.PRICES_DIR.mkdir(parents=True, exist_ok=True)
     config.MARKET_DIR.mkdir(parents=True, exist_ok=True)
-
     update_membership()
-
     market_jobs = list(config.MARKET_SYMBOLS.items())
-    failed_market = _download_group(market_jobs, config.MARKET_DIR, "Markets", report)
+    return _download_group(market_jobs, config.MARKET_DIR, "Markets", report)
 
-    stock_jobs = [(symbol, yahoo_ticker(symbol)) for symbol in all_symbols()]
-    failed_stocks = _download_group(stock_jobs, config.PRICES_DIR, "Stock prices", report)
+
+def download_stocks(symbols, report=_print_progress, label="Stock prices"):
+    """Download the full history of these stocks. Returns those Yahoo has no data for."""
+    stock_jobs = [(symbol, yahoo_ticker(symbol)) for symbol in symbols]
+    return _download_group(stock_jobs, config.PRICES_DIR, label, report)
+
+
+def update_all(report=_print_progress):
+    """Refresh the membership list, then download the full history of everything.
+
+    Yahoo re-adjusts old prices after every dividend and split, which is why
+    the full history is downloaded again rather than only the new days. The
+    daily update (trading/update.py) does this once a week and adds the days
+    in between from NSE's day files.
+
+    Returns (failed market names, stock symbols Yahoo has no data for).
+    """
+    failed_market = update_markets(report)
+    failed_stocks = download_stocks(all_symbols(), report)
     return failed_market, failed_stocks
 
 

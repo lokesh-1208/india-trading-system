@@ -54,3 +54,30 @@ def test_clean_prices_sorts_drops_empty_rows_and_duplicates():
 def test_clean_prices_returns_empty_table_for_no_data():
     assert len(data.clean_prices(None)) == 0
     assert len(data.clean_prices(pd.DataFrame())) == 0
+
+
+def test_current_member_missing_from_history_is_added_from_a_year_ago():
+    added = data.add_listed_members(MEMBERSHIP, ["AAA", "BBB", "ITC"], today="2026-10-13")
+    itc = added[added["symbol"] == "ITC"]
+    assert len(itc) == 1
+    assert itc.iloc[0]["start"] == pd.Timestamp("2025-10-13")
+    assert pd.isna(itc.iloc[0]["end"])
+    assert data.membership_mask("ITC", pd.to_datetime(["2020-01-01", "2026-10-12"]),
+                                added).tolist() == [False, True]
+
+
+def test_members_already_in_the_history_are_not_added_twice():
+    added = data.add_listed_members(MEMBERSHIP, ["AAA", "BBB"], today="2026-10-13")
+    assert len(added) == len(MEMBERSHIP)
+
+
+def test_a_download_missing_the_last_saved_day_keeps_that_day(tmp_path):
+    path = tmp_path / "NIFTY50.csv"
+    saved = pd.DataFrame({"Open": [1.0, 2.0, 3.0], "High": 1.0, "Low": 1.0, "Close": 1.0,
+                          "Volume": 0.0},
+                         index=pd.to_datetime(["2026-10-09", "2026-10-12", "2026-10-13"]))
+    saved.index.name = "Date"
+    saved.to_csv(path)
+    download = saved.iloc[:2]                     # Yahoo dropped 13 Oct
+    merged = data.keep_newer_days(download, path)
+    assert list(merged.index.strftime("%d")) == ["09", "12", "13"]

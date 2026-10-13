@@ -8,8 +8,9 @@ import pandas as pd
 import streamlit as st
 
 import config
-from trading import (breadth, charts, company, data, flows, indicators, journal, model, news,
-                     picks, report, rotation, today, ui, update)
+from trading import (breadth, charts, company, data, flows, fundamentals, indicators, journal,
+                     model, movers, news, newsview, picks, pledge, premarket, report, rotation,
+                     today, ui, update)
 from trading.screens import Screens
 
 st.set_page_config(page_title="Kasauti", layout="wide")
@@ -303,7 +304,7 @@ def company_page():
                        else " not scored by the model"))
     ui.chips(stands)
 
-    tiles = st.columns(6)
+    tiles = st.columns(8)
     cap = card["market_cap_crore"]
     cap_text = ("-" if cap is None or pd.isna(cap) else
                 f"Rs {cap / 1e5:,.1f}L cr" if cap >= 1e5 else f"Rs {cap:,.0f} cr")
@@ -313,7 +314,22 @@ def company_page():
                     delta_color="off")
     tiles[3].metric("Return on equity", pct(card["return_on_equity"], signed=False))
     tiles[4].metric("Debt to equity", num(card["debt_to_equity"], 2))
-    tiles[5].metric("Scorecard", f"{company.score(card, financial)} of 10")
+    tiles[5].metric("ROCE", "-" if financial else pct(card.get("roce"), signed=False),
+                    help="Return on capital employed: profit before interest and tax / "
+                         "(equity + debt). Not used for banks and finance companies.")
+    tiles[6].metric("Cash / profit, 3y", "-" if financial else num(card.get("cash_conversion"), 2),
+                    help="Cash from operations divided by reported profit over the last 3 "
+                         "years. Below 0.8 means profit is not turning into cash.")
+    tiles[7].metric("Scorecard", f"{company.score(card, financial)} of "
+                                 f"{len(company.scorecard(card, financial))}")
+    pledged_pct = load_pledges().get(symbol)
+    if pledged_pct is not None and pd.notna(pledged_pct) \
+            and pledged_pct >= config.PLEDGE_RED_FLAG_PCT:
+        st.warning(f"Red flag: promoters have pledged {pledged_pct:.1f}% of their shares. If "
+                   "the price falls, lenders can sell them, pushing the price down further.")
+    if card.get("results_filed") is not None:
+        st.caption(f"Latest results ({card['quarter']:%b %Y} quarter) filed with NSE on "
+                   f"{card['results_filed']:%d %b %Y, %I:%M %p}.")
 
     # ---- the model's view ----
     title = (f"Model view: rank {rank} of {len(ranking)}, score {ranking.loc[symbol, 'score']:.0f}"
@@ -437,6 +453,8 @@ def company_page():
                 }), hide_index=True, use_container_width=True)
             with right:
                 pledged = {True: "Yes", False: "No", None: "Not stated"}[owners["promoters_pledged"]]
+                if pledged_pct is not None and pd.notna(pledged_pct):
+                    pledged = f"{pledged_pct:.1f}% of their shares"
                 st.metric("Promoter shares pledged", pledged)
                 st.markdown("**Mutual fund schemes holding over 1%**")
                 if owners["funds"]:
@@ -472,11 +490,33 @@ def company_page():
                          hide_index=True, use_container_width=True)
 
     # ---- scorecard ----
-    with st.expander(f"Scorecard (a rule of thumb, not part of the model): "
-                     f"{company.score(card, financial)} of 10"):
-        ui.checks(company.scorecard(card, financial))
-        st.caption("– means the figure is not available. These ten checks are common rules of "
-                   "thumb. They are not part of the model's score and have not been tested.")
+    checks = company.scorecard(card, financial)
+    with st.expander(f"Scorecard: {company.score(card, financial)} of {len(checks)}"):
+        ui.checks(checks)
+        st.caption("– means the figure is not available (ROCE and cash flow need NSE's "
+                   "filings; they do not apply to banks and finance companies). These are "
+                   "common rules of thumb. The number of checks passed is one of the "
+                   "business factors in the model's score.")
+
+    # ---- annual reports and concall transcripts ----
+    reports, transcripts = load_documents(symbol)
+    with st.expander(f"Annual reports and concall transcripts: {len(reports)} reports, "
+                     f"{len(transcripts)} transcripts"):
+        ui.section_note("For reading what management says: plans, guidance, risks. Not "
+                        "used by the model.")
+        if len(reports):
+            st.markdown("**Annual reports**")
+            st.dataframe(reports, hide_index=True, use_container_width=True,
+                         column_config={"Report": st.column_config.LinkColumn(
+                             "Report", display_text="open")})
+        if len(transcripts):
+            st.markdown("**Earnings calls and investor meets (last year)**")
+            st.dataframe(transcripts, hide_index=True, use_container_width=True,
+                         column_config={"Filing": st.column_config.LinkColumn(
+                             "Filing", display_text="open"),
+                             "What": st.column_config.TextColumn(width="large")})
+        if not len(reports) and not len(transcripts):
+            ui.empty("Nothing found on NSE for this company.")
 
 
 def _my_trades(trades, prices, symbols, last_day=None):
@@ -540,9 +580,11 @@ def _my_trades(trades, prices, symbols, last_day=None):
 
 GROUP_NOTES = {
     "ownership": "FII, mutual fund, promoter, DII, insurer and public holding changes; "
-                 "pledged shares; number of fund schemes above 1%",
+                 "pledged shares (yes/no, and the % pledged from Oct 2026); number of fund "
+                 "schemes above 1%",
     "business": "sales and profit growth (1 and 3 years), margin, return on equity, debt, "
-                "latest quarter against a year ago, the ten-point scorecard",
+                "latest quarter against a year ago, ROCE, cash from operations against "
+                "profit, the twelve-point scorecard",
     "valuation": "PE against its industry, price to book, earnings per share against "
                  "price, dividend yield",
     "price": "6-month strength, EMA trend, RSI, volume, ATR, distance from the 52-week high",
@@ -572,6 +614,292 @@ def _score_table(table):
         "MF change": table["mf_change"].round(2),
         "results due": table["no_new_buy"].map({True: "yes", False: ""}),
     })
+
+
+@st.cache_resource(show_spinner="Finding today's market movers ...")
+def load_movers():
+    """The day's heavy buying and selling across the Nifty 500, with reasons."""
+    stocks = load_stocks()
+    symbols = [symbol for symbol in data.load_universe()["Symbol"] if symbol in stocks]
+    moves = movers.day_moves(stocks, symbols)
+    nifty = load_nifty()
+    if len(moves) == 0 or nifty is None or len(nifty) < 2:
+        return None
+    day = moves["day"].max()
+    moves = moves[moves["day"] == day]
+    calendar = nifty.index[nifty.index < day]
+    previous_day = calendar[-1] if len(calendar) else day - pd.Timedelta(days=1)
+    _, deals = load_flows()
+    results = fundamentals.load_results_dates()
+    sides = {side: movers.explain(movers.heavy(moves, side), previous_day, load_news(),
+                                  deals, results, industry=load_model().industry)
+             for side in ("up", "down")}
+    reading = movers.mood(moves, data.load_market("INDIAVIX"), nifty)
+    return day, sides, reading
+
+
+@st.cache_resource(show_spinner=False)
+def load_pledges():
+    return pledge.latest()
+
+
+@st.cache_data(show_spinner="Looking up reports on NSE ...", ttl=24 * 3600)
+def load_documents(symbol):
+    """Annual reports (from NSE) and concall/investor-meet filings (from saved news)."""
+    reports = pd.DataFrame(columns=["Year", "Report", "Size"])
+    try:
+        from trading import nse
+        raw = nse.get_json(nse.session(), "/api/annual-reports", index="equities",
+                           symbol=symbol)
+        items = raw.get("data", []) if isinstance(raw, dict) else raw or []
+        reports = pd.DataFrame([{"Year": f"{item.get('fromYr')}-{item.get('toYr')}",
+                                 "Report": item.get("fileName"),
+                                 "Size": item.get("attFileSize") or ""}
+                                for item in items[:5] if item.get("fileName")],
+                               columns=["Year", "Report", "Size"])
+    except Exception:
+        pass
+    saved = load_news()
+    calls = saved[(saved["symbol"] == symbol)
+                  & saved["subject"].str.contains(
+                      r"Analysts|Investor Meet|Con\. Call|Earnings Call|Transcript",
+                      case=False, regex=True)
+                  & (saved["detail"].str.contains("transcript|recording|audio",
+                                                  case=False, regex=True))]
+    transcripts = pd.DataFrame({"Date": calls["time"].dt.strftime("%d %b %Y"),
+                                "What": [today.short_news(text, 140) for text in calls["detail"]],
+                                "Filing": calls["link"]}).head(8)
+    return reports, transcripts
+
+
+# ------------------------------------------------- reading the news ---------
+@st.cache_resource(show_spinner="Reading a year of company news ...")
+def load_news_reading():
+    """Every saved announcement and deal read as good or bad, and what followed each kind."""
+    _, deals = load_flows()
+    table = newsview.read_all(load_news(), deals, fundamentals.load_quarterly())
+    reactions = newsview.past_reactions(table, load_model().prepared["last_close"],
+                                        load_nifty()["Close"])
+    return table, reactions
+
+
+@st.cache_resource(show_spinner="Reading the overnight filings ...")
+def load_overnight(since):
+    """Announcements and deals since `since`, read (opening the PDF where the title is vague)."""
+    announcements = load_news()
+    _, deals = load_flows()
+    return newsview.read_all(announcements[announcements["time"] >= since],
+                             deals[deals["date"] >= since.normalize()],
+                             fundamentals.load_quarterly(), read_pdfs=True)
+
+
+def _india_now():
+    return pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
+
+
+def _model_word(symbol, ranking, in_trend):
+    if symbol not in ranking.index:
+        return "not scored"
+    rank = int(ranking.index.get_loc(symbol)) + 1
+    view = today.model_view(float(ranking.loc[symbol, "score"]), bool(in_trend.get(symbol, False)))
+    return f"{view} (rank {rank})"
+
+
+def before_open_section(ranking, in_trend, held, weekly_symbols):
+    """Today page: what happened since yesterday's close, and stocks likely to move at the open."""
+    now = _india_now()
+    nifty = load_nifty()
+    since = premarket.last_close_time(nifty.index, now)
+    morning = now.weekday() < 5 and 6 <= now.hour < 10
+    markets = premarket.load_markets()
+    moves = premarket.global_moves(markets, since)
+    guess, reasons = premarket.opening_guess(moves)
+    reading, reactions = load_news_reading()
+    overnight = load_overnight(since)
+    if len(overnight):
+        overnight = overnight.assign(lean=[newsview.learned_lean(group, lean, reactions)
+                                           for group, lean in zip(overnight["group"],
+                                                                  overnight["lean"])])
+    symbols = list(data.load_universe()["Symbol"])
+    preopen = premarket.load_preopen(now)
+    up = premarket.preopen_movers(preopen, symbols, "up")
+    down = premarket.preopen_movers(preopen, symbols, "down")
+    industry = load_model().industry
+    sectors = premarket.sector_effects(moves, industry)
+    likely = premarket.stock_list(overnight, sectors, up, down)
+    likely = likely[likely["symbol"].isin(set(symbols))]
+    mine = set(held) | set(weekly_symbols)
+    warnings = likely[likely["symbol"].isin(mine)]
+
+    title = (f"Before the open: {guess}. {int((likely['direction'] > 0).sum())} likely up, "
+             f"{int((likely['direction'] < 0).sum())} likely down"
+             + (f", {len(warnings)} of your stocks affected" if len(warnings) else "")
+             + " (not part of the model)")
+    with st.expander(title, expanded=morning):
+        ui.section_note(f"Everything since the close on {since:%a %d %b, %I:%M %p}: global "
+                        "markets, company filings with NSE and NSE's pre-open prices. For "
+                        "understanding the open only: not tested, not a buy or sell signal.")
+        if st.button("Refresh before-open data", key="premarket_refresh",
+                     help="Global markets, overnight announcements and NSE pre-open prices. "
+                          "Under a minute. Runs by itself at 9:10 am on weekdays."):
+            bar = st.progress(0.0, text="Starting ...")
+
+            def show_progress(step, done, total):
+                bar.progress(min(1.0, done / max(total, 1)), text=f"{step}: {done} of {total}")
+
+            try:
+                result = update.run_premarket(show_progress)
+                st.session_state["update_note"] = (
+                    f"Before-open data refreshed in {result['seconds']} s. "
+                    f"{result['news_added']} new announcements. "
+                    + ("NSE pre-open prices saved." if result["preopen"] else
+                       "NSE pre-open prices come after 9:08 am."))
+            except Exception as error:
+                st.session_state["update_note"] = f"The refresh stopped: {error}"
+            st.cache_resource.clear()
+            st.rerun()
+
+        st.markdown(f"**{guess}.** " + ("; ".join(reasons) + "." if reasons else
+                                         "No big global moves since the close."))
+        for line in premarket.sector_summary(sectors):
+            st.markdown(f"- {line}")
+        if len(moves):
+            st.dataframe(pd.DataFrame({
+                "Market": moves["market"], "Change %": moves["change_%"],
+                "As of": moves["day"].dt.strftime("%a %d %b")}),
+                hide_index=True, use_container_width=True)
+        for row in warnings.itertuples():
+            which = "you hold it" if row.symbol in set(held) else "on this week's list"
+            text = (f"**{row.symbol}** ({which}): likely to open "
+                    f"{'up' if row.direction > 0 else 'down'}. {row.reasons[0]}")
+            (st.success if row.direction > 0 else st.warning)(text)
+        if preopen is None:
+            st.caption("NSE's pre-open prices appear after 9:08 am on a trading day. "
+                       "Refresh then to see which stocks are set to open sharply up or down.")
+        up_tab, down_tab = st.tabs([f"Likely up ({int((likely['direction'] > 0).sum())})",
+                                    f"Likely down ({int((likely['direction'] < 0).sum())})"])
+        for tab, side in ((up_tab, 1), (down_tab, -1)):
+            with tab:
+                table = likely[likely["direction"] == side]
+                if len(table) == 0:
+                    ui.empty("Nothing found for this side.")
+                    continue
+                st.dataframe(pd.DataFrame({
+                    "Stock": table["symbol"],
+                    "Industry": [industry.get(symbol, "") for symbol in table["symbol"]],
+                    "Pre-open %": table["open_%"],
+                    "Why": [" | ".join(reasons) for reasons in table["reasons"]],
+                    "Model": [_model_word(symbol, ranking, in_trend) for symbol in table["symbol"]],
+                    "Filing": table["link"].replace("", None),
+                }), hide_index=True, use_container_width=True,
+                    column_config={
+                        "Filing": st.column_config.LinkColumn("Filing", display_text="open"),
+                        "Why": st.column_config.TextColumn(width="large")})
+        st.caption("Order: the pre-open price counts most, then clearly good or bad news, then "
+                   "industries that usually follow a global move (rules of thumb, for example "
+                   "IT with US tech). Whether a kind of news counts as good or bad is decided "
+                   "by what happened after it in the past year where there are enough cases.")
+
+
+def news_ideas_section(ranking, in_trend, close, trend, held, weekly_symbols):
+    """Today page: ideas from the news of the last few days, with the model's view."""
+    reading, reactions = load_news_reading()
+    buys, exits = newsview.ideas(reading, ranking, in_trend, close, trend.iloc[-1],
+                                 held=held, weekly=weekly_symbols, reactions=reactions)
+    title = (f"News ideas: {len(buys)} possible buys, {len(exits)} possible exits "
+             "(not tested)")
+    with st.expander(title):
+        ui.section_note("Company news of the last few days, read as good or bad, next to the "
+                        "model's view and the price since. Ideas only: the model's tested "
+                        "rules do not trade on news. Use them to understand a move, or if you "
+                        "decide to act on news yourself.")
+        buy_tab, exit_tab, past_tab = st.tabs([f"Possible buys ({len(buys)})",
+                                               f"Possible exits ({len(exits)})",
+                                               "What usually happens after news"])
+        for tab, table in ((buy_tab, buys), (exit_tab, exits)):
+            with tab:
+                if len(table) == 0:
+                    ui.empty("None at the moment.")
+                    continue
+                st.dataframe(pd.DataFrame({
+                    "Stock": table["symbol"],
+                    "News": table["label"],
+                    "When": pd.to_datetime(table["time"]).dt.strftime("%d %b %H:%M"),
+                    "Since news %": table["move_since_%"],
+                    "Model": [f"{view}" + (f" (rank {rank})" if rank else "")
+                              for view, rank in zip(table["view"], table["rank"])],
+                    "Idea": table["idea"],
+                    "What usually happened": table["history"],
+                    "Details": [today.short_news(text, 160) for text in table["what"]],
+                    "Filing": table["link"].replace("", None),
+                }), hide_index=True, use_container_width=True,
+                    column_config={
+                        "Filing": st.column_config.LinkColumn("Filing", display_text="open"),
+                        "Idea": st.column_config.TextColumn(width="large"),
+                        "Details": st.column_config.TextColumn(width="large")})
+        with past_tab:
+            if len(reactions) == 0:
+                ui.empty("Not enough saved news history yet.")
+            else:
+                st.dataframe(pd.DataFrame({
+                    "Kind of news": reactions["group"],
+                    "Past cases": reactions["cases"],
+                    f"Average move vs Nifty, {config.NEWS_REACTION_DAYS} days (%)":
+                        reactions["average_%"],
+                    "Beat Nifty (% of cases)": reactions["beat_nifty_%"],
+                }), hide_index=True, use_container_width=True)
+                st.caption("From a year of NSE announcements and prices: the close before the "
+                           "news became public to the close "
+                           f"{config.NEWS_REACTION_DAYS} trading days later, minus Nifty. "
+                           f"Kinds with at least {2 * config.NEWS_MIN_CASES} cases decide "
+                           "whether the news counts as good or bad in the ideas.")
+
+
+def movers_section():
+    """Today page: the stocks with unusually heavy buying or selling, and why."""
+    found = load_movers()
+    if found is None:
+        return
+    day, sides, reading = found
+    title = (f"Market movers, {day:%a %d %b}: {reading['label']}. "
+             f"{len(sides['up'])} heavy buying, {len(sides['down'])} heavy selling "
+             "(not part of the model)")
+    with st.expander(title):
+        ui.section_note("Where the crowd's money went: Nifty 500 stocks that moved at least "
+                        f"{config.MOVERS_MIN_MOVE_PCT:.0f}% on at least "
+                        f"{config.MOVERS_MIN_VOLUME_X:.0f}x their normal volume. For "
+                        "understanding how the market is behaving only: these are not tested "
+                        "and are not buy or sell signals. Big moves often reverse in the "
+                        "following days.")
+        st.markdown(f"**Mood: {reading['label']}.** {reading['text']}")
+        up_tab, down_tab = st.tabs([f"Heavy buying ({len(sides['up'])})",
+                                    f"Heavy selling ({len(sides['down'])})"])
+        for tab, side in ((up_tab, "up"), (down_tab, "down")):
+            with tab:
+                table = sides[side]
+                if len(table) == 0:
+                    ui.empty("No stock moved this much on heavy volume.")
+                    continue
+                st.dataframe(pd.DataFrame({
+                    "Stock": table["symbol"],
+                    "Industry": [load_model().industry.get(symbol, "")
+                                 for symbol in table["symbol"]],
+                    "Change %": table["change_%"].round(1),
+                    "Opened %": table["gap_%"].round(1),
+                    "Volume vs normal": table["volume_x"].map("{:.1f}x".format),
+                    "Traded (Rs cr)": table["turnover_cr"].round(0),
+                    "Why (likely)": table["why"],
+                    "Filing": table["link"].replace("", None),
+                }), hide_index=True, use_container_width=True,
+                    column_config={
+                        "Filing": st.column_config.LinkColumn("Filing", display_text="open"),
+                        "Why (likely)": st.column_config.TextColumn(width="large")})
+        st.caption("Opened %: where the stock opened against yesterday's close; a big gap "
+                   "usually means news came out overnight. Why: company filings with NSE "
+                   "since yesterday's close, results, and bulk or block deals that day. "
+                   "'Sector move' means no company news, but several stocks of the same "
+                   "industry moved together. 'Crowd move' means no company news was found: "
+                   "sentiment, a rumour or the wider market. Updated with every data update.")
 
 
 def today_page():
@@ -651,6 +979,10 @@ def today_page():
     ui.day_plan(headline, note, plan["market_level"], plan["market_note"])
     if plan["market_level"] != "strong":
         st.caption(plan["market_note"])
+
+    # ---- before the open: overnight news, global markets, pre-open prices ----
+    latest_trend = built.trading["in_trend"].iloc[-1]
+    before_open_section(plan["today"], latest_trend, held, set(weekly["symbol"]))
 
     show_what = st.session_state.get("_show", "Buy and sell")
     buy_symbols = set(buy_now["symbol"])
@@ -863,6 +1195,10 @@ def today_page():
                    "Card colour is the model's view: green strong, grey neutral, amber below "
                    "its trend line, red weak.")
 
+    # ---- market movers: off the model, for understanding the crowd ----
+    movers_section()
+    news_ideas_section(plan["today"], latest_trend, close, trend, held, set(weekly["symbol"]))
+
     # ---- record trades ----
     with st.expander("Record a trade, and your profit so far"):
         _my_trades(trades, prices, sorted(load_stocks()), last_day)
@@ -950,19 +1286,29 @@ if page == "Today":
 
 ui.side_heading("Data")
 ui.data_status(fresh == "fresh", status_text)
-if st.sidebar.button("Update data now", type="primary", use_container_width=True,
-                     help="Downloads the newest closing prices, news and FII/DII figures "
-                          "from the internet, then refreshes this page. Takes a few minutes."):
-    bar = st.sidebar.progress(0.0, text="Starting ...")
+def run_with_progress(where, **options):
+    """Run an update with a progress bar, then refresh the page with a short note."""
+    bar = where.progress(0.0, text="Starting ...")
 
     def show_progress(step, done, total):
-        bar.progress(min(1.0, done / total), text=f"{step}: {done} of {total}")
+        bar.progress(min(1.0, done / max(total, 1)), text=f"{step}: {done} of {total}")
 
     try:
-        summary = update.run_update(include_company_data=None, report=show_progress)
-        note = "Data updated."
+        summary = update.run_update(report=show_progress, **options)
+        note = "Data updated in " + (f"{summary['seconds'] // 60} min "
+                                     if summary["seconds"] >= 60 else "") \
+            + f"{summary['seconds'] % 60} s. " + update.describe_prices(summary["prices"])
         if summary["failed_markets"]:
             note += " No data for: " + ", ".join(summary["failed_markets"]) + "."
+        if summary.get("filings_companies"):
+            note += f" NSE result filings checked for {summary['filings_companies']} companies."
+        if summary.get("filings_left"):
+            note += (f" First download of NSE filings: {summary['filings_left']} companies "
+                     "left, continued on the next updates.")
+        if summary["results_companies"]:
+            note += f" Company results checked for {summary['results_companies']} companies."
+        if summary["results_problem"]:
+            note += " Company results could not be finished."
         if summary["shareholding_problem"]:
             note += " Shareholding could not be refreshed."
         if summary["news_problem"] or summary["flows_problem"]:
@@ -975,22 +1321,50 @@ if st.sidebar.button("Update data now", type="primary", use_container_width=True
     st.cache_resource.clear()
     st.rerun()
 
+
+if st.sidebar.button("Update data now", type="primary", use_container_width=True,
+                     help="Adds the newest closing prices from NSE, news, FII/DII figures "
+                          "and results of companies that just reported. Usually 1-2 "
+                          "minutes; once a week the full price history is downloaded "
+                          "too (about 6 minutes more)."):
+    run_with_progress(st.sidebar)
+
 if "update_note" in st.session_state:
     st.sidebar.info(st.session_state.pop("update_note"))
-st.sidebar.caption("Once a day, after 4 pm. The market closes at 3:30, so there is nothing "
-                   "new to download during the day.")
+st.sidebar.caption("Once a day, after 6 pm, when NSE has published the day's closing "
+                   "prices. Earlier in the evening the day's prices come from Yahoo "
+                   "and are corrected on the next update.")
 
 with st.sidebar.expander("More data options"):
+    age = update.full_download_age_days()
+    st.caption("Full price history: not downloaded yet." if age is None
+               else f"Full price history from Yahoo: last downloaded {age} days ago "
+                    f"(again every {config.FULL_PRICES_REFRESH_DAYS} days by itself).")
+    if st.button("Download full price history now", use_container_width=True,
+                 help="Downloads 10 years of prices for every stock again from Yahoo. "
+                      "About 6 minutes. Only needed if prices look wrong."):
+        run_with_progress(st, full_prices=True, include_company_data=False)
     age = update.company_data_age_days()
-    st.caption("Company results and shareholding: not downloaded yet." if age is None
-               else "Company results and shareholding refresh by themselves once a week "
-                    f"(last: {age:.0f} days ago).")
-    if st.button("Refresh company results now", use_container_width=True,
-                 help="Downloads company results and shareholding now instead of waiting "
-                      "for the weekly refresh. Adds several minutes."):
+    st.caption("Company results: not downloaded yet." if age is None
+               else "Company results are downloaded by themselves for companies that "
+                    "just reported. Shareholding is checked once a week.")
+    if st.button("Refresh all company results now", use_container_width=True,
+                 help="Downloads results for every company and the shareholding "
+                      "filings, without downloading prices again. 20 minutes or more."):
+        bar = st.progress(0.0, text="Starting ...")
+
+        def show_company_progress(step, done, total):
+            bar.progress(min(1.0, done / max(total, 1)), text=f"{step}: {done} of {total}")
+
         try:
-            update.run_update(include_company_data=True)
-            st.session_state["update_note"] = "Prices and company results updated."
+            result = update.refresh_company_data(show_company_progress, everything=True,
+                                                 include_shareholding=True)
+            note = (f"NSE result filings checked for {result.get('filings_companies', 0)} "
+                    f"companies; Yahoo results for {result['results_companies']}.")
+            if result["results_problem"] or result["shareholding_problem"]:
+                note += " Some downloads did not finish: " + (
+                    result["results_problem"] or result["shareholding_problem"])
+            st.session_state["update_note"] = note
         except Exception as error:
             st.session_state["update_note"] = f"The update stopped: {error}"
         st.cache_resource.clear()
@@ -1005,7 +1379,7 @@ with st.sidebar.expander("More data options"):
 
 ui.side_heading("Your routine")
 ui.routine([
-    ("Evening, after 4 pm", "Update data. In Your stocks, sell tomorrow at the open if it "
+    ("Evening, after 6 pm", "Update data. In Your stocks, sell tomorrow at the open if it "
                             "says Sell; move a GTT up if it says so."),
     ("Sunday or Monday early", "Place AMO limit buys at the limits of the weekly list."),
     ("Any day", "Record every buy and sell under Record a trade."),

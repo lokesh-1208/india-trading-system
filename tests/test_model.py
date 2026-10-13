@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+import pytest
 
 import config
 from trading import model
@@ -205,3 +206,21 @@ def test_caution_market_buys_get_a_smaller_amount():
     share = built.amount_share()
     assert share in (1.0, 0.75)
     assert share == (1.0 if bool(built.strong_market().iloc[-1]) else 0.75)
+
+
+def test_nse_figures_give_roce_cash_conversion_and_the_filing_day():
+    annual = pd.DataFrame({
+        "symbol": ["A"] * 3,
+        "period_end": pd.to_datetime(["2024-03-31", "2025-03-31", "2026-03-31"]),
+        "revenue": [1000.0, 1100.0, 1200.0], "net_income": [100.0, 110.0, 120.0],
+        "equity": [800.0, 850.0, 900.0], "total_debt": [100.0, 100.0, 300.0],
+        "shares": [10.0] * 3, "cfo": [90.0, 100.0, 110.0], "pbt": [140.0, 150.0, 160.0],
+        "finance_costs": [10.0, 10.0, 20.0],
+        "filed": pd.to_datetime(["2024-04-20 18:00", "2025-04-21 19:00", None])})
+    factors = model.annual_factors(annual).set_index("period_end")
+    latest = factors.loc["2026-03-31"]
+    assert latest["roce"] == pytest.approx(180.0 / 1200.0)
+    assert latest["cash_conversion"] == pytest.approx(300.0 / 330.0)
+    # known filing: usable from the next day; unknown: the 75-day lag
+    assert factors.loc["2025-03-31", "available"] == pd.Timestamp("2025-04-22")
+    assert latest["available"] == pd.Timestamp("2026-03-31") + pd.Timedelta(days=75)

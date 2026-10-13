@@ -3,7 +3,9 @@
 It brings together the price position (52-week range), size (market value),
 valuation (PE, price to book, dividend yield), profitability (return on
 equity, margin), safety (debt) and growth (1-year, 3-year, latest quarter).
-A ten-point scorecard counts how many common-sense checks the company passes.
+A twelve-point scorecard counts how many common-sense checks the company passes.
+From NSE's filings it also shows return on capital employed (ROCE) and whether
+profit turns into cash (cash from operations against profit over 3 years).
 """
 
 import pandas as pd
@@ -63,6 +65,27 @@ def last_four_quarters(quarterly_rows):
     }
 
 
+def _roce_and_cash(years):
+    """ROCE of the latest year, and cash conversion over the last 3 years.
+
+    Needs NSE's figures (profit before tax, finance costs, cash from operations).
+    """
+    latest = years.iloc[-1]
+    roce = None
+    if _known(latest.get("pbt")) and _known(latest.get("equity")):
+        capital = latest["equity"] + (latest["total_debt"] if _known(latest["total_debt"]) else 0)
+        if capital > 0:
+            finance = latest["finance_costs"] if _known(latest.get("finance_costs")) else 0
+            roce = (latest["pbt"] + finance) / capital
+    conversion = None
+    if "cfo" in years:
+        recent = years.tail(3)
+        recent = recent[recent["cfo"].notna() & recent["net_income"].notna()]
+        if len(recent) >= 2 and recent["net_income"].sum() > 0:
+            conversion = recent["cfo"].sum() / recent["net_income"].sum()
+    return roce, conversion
+
+
 def build_card(symbol, prices, annual_rows, quarterly_rows=None, dividend_rows=None,
                industry=""):
     """Work out every figure on the card for one company.
@@ -89,6 +112,7 @@ def build_card(symbol, prices, annual_rows, quarterly_rows=None, dividend_rows=N
         "net_margin", "return_on_equity", "debt_to_equity", "book_value", "price_to_book",
         "eps", "pe", "earnings_basis", "quarter", "quarter_sales_growth",
         "quarter_profit_growth", "dividend_yield", "industry_pe",
+        "roce", "cash_conversion", "cash_from_operations_crore", "results_filed",
     ]
     card.update({name: None for name in names})
     card["owners"] = None      # shareholding pattern, filled in by screens.py
@@ -116,6 +140,9 @@ def build_card(symbol, prices, annual_rows, quarterly_rows=None, dividend_rows=N
             card["profit_growth_3y"] = _yearly_growth_rate(
                 latest["net_income"], three_back["net_income"], 3)
         card["net_margin"] = fundamentals._ratio(latest["net_income"], latest["revenue"])
+        card["roce"], card["cash_conversion"] = _roce_and_cash(years)
+        if _known(latest.get("cfo")):
+            card["cash_from_operations_crore"] = latest["cfo"] / CRORE
         card["return_on_equity"] = fundamentals._ratio(latest["net_income"], equity)
         card["debt_to_equity"] = fundamentals._ratio(latest["total_debt"], equity)
 
@@ -142,6 +169,8 @@ def build_card(symbol, prices, annual_rows, quarterly_rows=None, dividend_rows=N
         year_ago = _row_near(quarters.iloc[:-1], "period_end",
                              latest["period_end"] - pd.DateOffset(years=1))
         card["quarter"] = latest["period_end"]
+        if _known(latest.get("filed")):
+            card["results_filed"] = pd.Timestamp(latest["filed"])
         if year_ago is not None:
             card["quarter_sales_growth"] = _growth(latest["revenue"], year_ago["revenue"])
             card["quarter_profit_growth"] = _growth(
@@ -158,7 +187,7 @@ def build_card(symbol, prices, annual_rows, quarterly_rows=None, dividend_rows=N
 
 
 def scorecard(card, is_financial=False):
-    """Ten yes/no checks. Returns a list of (check, passed).
+    """Twelve yes/no checks. Returns a list of (check, passed).
 
     passed is True, False, or None when the figure is not available.
     """
@@ -192,11 +221,17 @@ def scorecard(card, is_financial=False):
         ("PE is not above the industry's", cheaper),
         ("Pays a dividend",
          None if not _known(card["dividend_yield"]) else card["dividend_yield"] > 0),
+        (f"Return on capital employed {config.SCORE_MIN_ROCE:.0%} or more",
+         None if is_financial else at_least(card.get("roce"), config.SCORE_MIN_ROCE)),
+        (f"Cash from operations at least {config.SCORE_MIN_CASH_CONVERSION:.0%} of profit "
+         "(3 years)",
+         None if is_financial else at_least(card.get("cash_conversion"),
+                                            config.SCORE_MIN_CASH_CONVERSION)),
     ]
 
 
 def score(card, is_financial=False):
-    """Number of checks passed, out of ten. Unknown checks do not count."""
+    """Number of checks passed, out of twelve. Unknown checks do not count."""
     return sum(1 for _, passed in scorecard(card, is_financial) if passed)
 
 
@@ -253,6 +288,9 @@ def format_card(card, is_financial=False, next_results=None):
         f"  Profit margin         {_pct(card['net_margin']).lstrip('+')}",
         f"  Return on equity      {_pct(card['return_on_equity']).lstrip('+')}",
         f"  Debt to equity        {_num(card['debt_to_equity'])}",
+        f"  Return on capital     {_pct(card.get('roce')).lstrip('+')}   (ROCE)",
+        f"  Cash from operations  Rs {_num(card.get('cash_from_operations_crore'), 0)} crore"
+        f"   (3-year cash / profit {_num(card.get('cash_conversion'))})",
         "",
         "GROWTH",
         f"  Sales, 1 year         {_pct(card['sales_growth_1y'])}",
@@ -264,7 +302,7 @@ def format_card(card, is_financial=False, next_results=None):
         f"  Next results          {_day(next_results)}",
     ]
     lines += ["", *_owner_lines(card.get("owners"))]
-    lines += ["", f"SCORECARD  {score(card, is_financial)} of 10 checks passed"]
+    lines += ["", f"SCORECARD  {score(card, is_financial)} of {len(checks)} checks passed"]
     lines += [f"  [{marks[passed]}] {name}" for name, passed in checks]
     return "\n".join(lines)
 

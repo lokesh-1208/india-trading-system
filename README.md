@@ -25,7 +25,7 @@ The first download takes a few minutes.
 
 ## Daily use
 
-1. **Each evening after 4 pm:** press **Update data now** in the dashboard sidebar (or let
+1. **Each evening after 6 pm:** press **Update data now** in the dashboard sidebar (or let
    the scheduled update do it, see the end of this file).
 2. **Each morning:** open the dashboard (`start_dashboard.bat`, or
    `streamlit run dashboard.py`) and read the **Today** page.
@@ -128,7 +128,7 @@ From every start date since 2022 the model beat Nifty by 10-25 points a year.
 | Command | What it does |
 |---|---|
 | `streamlit run dashboard.py` | Opens the dashboard. Its **Update data now** button does the same job as `update_data.py`. |
-| `python update_data.py` | Downloads prices for about 800 stocks, index membership history, Nifty, India VIX, global markets, the rupee, crude, gold, company announcements, FII/DII figures, bulk and block deals, and (weekly) company results and shareholding into `data/`. |
+| `python update_data.py` | Downloads prices for about 800 stocks, index membership history, Nifty, India VIX, global markets, the rupee, crude, gold, company announcements, FII/DII figures, bulk and block deals, results of companies that just reported, and (weekly) shareholding into `data/`. Daily prices come from NSE's day file; the full Yahoo history is downloaded once a week. |
 | `python research/full_model.py` | Runs the model through the past and prints its results and today's scores. |
 | `python research/entry_gap.py` | The buy-range test. |
 | `python stock_card.py TCS` | Everything known about one company: price range, valuation, growth, profitability, debt, dividend, shareholding and a ten-point scorecard. |
@@ -150,7 +150,13 @@ trading/journal.py       your real trades (journal/real_trades.csv, not on GitHu
 trading/update.py        refreshes all data; shared by update_data.py and the dashboard
 trading/data.py          downloads and loads prices and index membership
 trading/indicators.py    EMA, RSI, ATR
-trading/fundamentals.py  company results, ratios, results dates
+trading/fundamentals.py  company results, ratios, results dates, which companies are due
+trading/gaps.py          daily prices from NSE's day file (bhavcopy); fills days Yahoo misses
+trading/movers.py        market movers on the Today page: heavy buying/selling and why (info only)
+trading/premarket.py     before the open: global moves, overnight news, NSE pre-open prices (info only)
+trading/newsview.py      reads announcements as good or bad; news ideas; what usually happened after news
+trading/filings.py       company results from NSE's own filings (XBRL): 2018 on, cash flow, ROCE, filing times
+trading/pledge.py        % of promoter shares pledged (NSE)
 trading/shareholding.py  who owns each company: promoters, FII, DII, mutual funds, public
 trading/news.py          company announcements to NSE, sorted into plain categories
 trading/flows.py         daily FII/DII buying and selling, bulk and block deals
@@ -179,6 +185,10 @@ The membership history comes from the public project
 [nifty500-momentum-backtest](https://github.com/rishabhjain0295-web/nifty500-momentum-backtest),
 which built it from NSE's inclusion/exclusion records. `update_data.py` downloads it into
 `data/universe/`. It is not stored in this repository.
+
+That history file sometimes misses a stock that is on NSE's current Nifty 500 list (ITC,
+Tata Power and Federal Bank were missing in October 2026). Such a stock is counted as a
+member from one year ago, so it appears in today's list while older backtests leave it out.
 
 ## Known limits
 
@@ -217,4 +227,5 @@ which built it from NSE's inclusion/exclusion records. `update_data.py` download
 - `start_dashboard.bat`: double-click to open the dashboard. Right-click it and choose
   "Send to > Desktop (create shortcut)" to get a desktop icon.
 - `schedule_daily_update.bat`: double-click once. Windows will then download the latest
-  data every weekday at 6:30 pm (the laptop must be on). The log is `reports/update_log.txt`.
+  data every weekday at 6:30 pm, and refresh the before-the-open data at 9:10 am (the
+  laptop must be on). The log is `reports/update_log.txt`.

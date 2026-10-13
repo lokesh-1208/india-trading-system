@@ -219,3 +219,12 @@ FII_DII_FILE = DATA_DIR / "flows" / "fii_dii.csv"              # daily buying an
 LARGE_DEALS_FILE = DATA_DIR / "flows" / "large_deals.csv"      # bulk and block deals
 ANNOUNCEMENT_DAYS_FIRST_RUN = 10     # how far back the first download goes
 ANNOUNCEMENT_DAYS_KEPT = 400         # older announcements are dropped from the file
+
+# ------------------------------------------------- market movers (info only) --
+# The "Market movers" section on the Today page: stocks with unusually heavy
+# buying or selling on the last day. Not part of the model; no buy or sell.
+MOVERS_MIN_MOVE_PCT = 2.0        # price moved at least 2% up or down
+MOVERS_MIN_VOLUME_X = 2.0        # on at least 2x the stock's normal volume
+MOVERS_VOLUME_DAYS = 20          # normal volume = average of the previous 20 days
+MOVERS_PER_SIDE = 20             # how many stocks to show on each side
+MOVERS_SECTOR_MIN = 3            # this many movers in one industry = a sector move

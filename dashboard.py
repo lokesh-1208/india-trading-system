@@ -8,8 +8,8 @@ import pandas as pd
 import streamlit as st
 
 import config
-from trading import (breadth, charts, company, data, flows, indicators, journal, model, news,
-                     picks, report, rotation, today, ui, update)
+from trading import (breadth, charts, company, data, flows, fundamentals, indicators, journal,
+                     model, movers, news, picks, report, rotation, today, ui, update)
 from trading.screens import Screens
 
 st.set_page_config(page_title="Kasauti", layout="wide")
@@ -574,6 +574,75 @@ def _score_table(table):
     })
 
 
+@st.cache_resource(show_spinner="Finding today's market movers ...")
+def load_movers():
+    """The day's heavy buying and selling across the Nifty 500, with reasons."""
+    stocks = load_stocks()
+    symbols = [symbol for symbol in data.load_universe()["Symbol"] if symbol in stocks]
+    moves = movers.day_moves(stocks, symbols)
+    nifty = load_nifty()
+    if len(moves) == 0 or nifty is None or len(nifty) < 2:
+        return None
+    day = moves["day"].max()
+    moves = moves[moves["day"] == day]
+    calendar = nifty.index[nifty.index < day]
+    previous_day = calendar[-1] if len(calendar) else day - pd.Timedelta(days=1)
+    _, deals = load_flows()
+    results = fundamentals.load_results_dates()
+    sides = {side: movers.explain(movers.heavy(moves, side), previous_day, load_news(),
+                                  deals, results, industry=load_model().industry)
+             for side in ("up", "down")}
+    reading = movers.mood(moves, data.load_market("INDIAVIX"), nifty)
+    return day, sides, reading
+
+
+def movers_section():
+    """Today page: the stocks with unusually heavy buying or selling, and why."""
+    found = load_movers()
+    if found is None:
+        return
+    day, sides, reading = found
+    title = (f"Market movers, {day:%a %d %b}: {reading['label']}. "
+             f"{len(sides['up'])} heavy buying, {len(sides['down'])} heavy selling "
+             "(not part of the model)")
+    with st.expander(title):
+        ui.section_note("Where the crowd's money went: Nifty 500 stocks that moved at least "
+                        f"{config.MOVERS_MIN_MOVE_PCT:.0f}% on at least "
+                        f"{config.MOVERS_MIN_VOLUME_X:.0f}x their normal volume. For "
+                        "understanding how the market is behaving only: these are not tested "
+                        "and are not buy or sell signals. Big moves often reverse in the "
+                        "following days.")
+        st.markdown(f"**Mood: {reading['label']}.** {reading['text']}")
+        up_tab, down_tab = st.tabs([f"Heavy buying ({len(sides['up'])})",
+                                    f"Heavy selling ({len(sides['down'])})"])
+        for tab, side in ((up_tab, "up"), (down_tab, "down")):
+            with tab:
+                table = sides[side]
+                if len(table) == 0:
+                    ui.empty("No stock moved this much on heavy volume.")
+                    continue
+                st.dataframe(pd.DataFrame({
+                    "Stock": table["symbol"],
+                    "Industry": [load_model().industry.get(symbol, "")
+                                 for symbol in table["symbol"]],
+                    "Change %": table["change_%"].round(1),
+                    "Opened %": table["gap_%"].round(1),
+                    "Volume vs normal": table["volume_x"].map("{:.1f}x".format),
+                    "Traded (Rs cr)": table["turnover_cr"].round(0),
+                    "Why (likely)": table["why"],
+                    "Filing": table["link"].replace("", None),
+                }), hide_index=True, use_container_width=True,
+                    column_config={
+                        "Filing": st.column_config.LinkColumn("Filing", display_text="open"),
+                        "Why (likely)": st.column_config.TextColumn(width="large")})
+        st.caption("Opened %: where the stock opened against yesterday's close; a big gap "
+                   "usually means news came out overnight. Why: company filings with NSE "
+                   "since yesterday's close, results, and bulk or block deals that day. "
+                   "'Sector move' means no company news, but several stocks of the same "
+                   "industry moved together. 'Crowd move' means no company news was found: "
+                   "sentiment, a rumour or the wider market. Updated with every data update.")
+
+
 def today_page():
     """The one page to act from: what to buy, what to do with what you hold, what to avoid."""
     style = config.MODEL_STYLE
@@ -862,6 +931,9 @@ def today_page():
                    "changes, fund raising and dividends filed with NSE in the last 3 days. "
                    "Card colour is the model's view: green strong, grey neutral, amber below "
                    "its trend line, red weak.")
+
+    # ---- market movers: off the model, for understanding the crowd ----
+    movers_section()
 
     # ---- record trades ----
     with st.expander("Record a trade, and your profit so far"):

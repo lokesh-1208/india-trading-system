@@ -152,6 +152,7 @@ trading/data.py          downloads and loads prices and index membership
 trading/indicators.py    EMA, RSI, ATR
 trading/fundamentals.py  company results, ratios, results dates, which companies are due
 trading/gaps.py          daily prices from NSE's day file (bhavcopy); fills days Yahoo misses
+trading/movers.py        market movers on the Today page: heavy buying/selling and why (info only)
 trading/shareholding.py  who owns each company: promoters, FII, DII, mutual funds, public
 trading/news.py          company announcements to NSE, sorted into plain categories
 trading/flows.py         daily FII/DII buying and selling, bulk and block deals

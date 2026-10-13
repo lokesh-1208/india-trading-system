@@ -226,6 +226,7 @@ journal/
 web/node_modules/
 web/test-results/
 web/playwright-report/
+web/*.tsbuildinfo
 !web/dist/
 # Windows shortcuts point to a path on one computer
 *.lnk

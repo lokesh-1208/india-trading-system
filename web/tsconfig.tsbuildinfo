@@ -1,1 +1,0 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/format.ts","./src/main.tsx","./src/components/PriceChart.tsx","./src/components/ui.tsx","./src/pages/BeforeOpen.tsx","./src/pages/Market.tsx","./src/pages/News.tsx","./src/pages/Stock.tsx","./src/pages/Today.tsx","./src/pages/Trades.tsx"],"version":"5.9.3"}

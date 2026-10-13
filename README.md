@@ -37,16 +37,21 @@ The first download takes a few minutes.
 | Part | What it shows |
 |---|---|
 | Market strip | Nifty 50, India VIX, USD/INR, Brent crude, gold and the S&P 500, with the day's change. |
-| Headline | What to do today, for example "Buy 5 stocks, nothing to sell", and the market mood: strong, caution or weak. |
-| To buy | The model's picks. Each row has a 4-month chart, a bar showing the stop-loss, the signal close and the buy limit, and the number of shares. |
-| Backups | The next stocks in line, for when a pick is already above its buy limit. |
-| Your stocks | Each stock you recorded, marked Hold or Sell with the reason and the price at which it would be sold. |
+| Headline | What to do today, for example "Buy 3 from the weekly list. Watch: 4 others", and the market mood: strong, caution or weak. |
+| Buy: this week's list | The tested list, made from the close before the first trading day of the week. Each stock is marked Buy, Buy (backup), Missed (above its limit), Trend broke, Results soon, Too costly or You hold. Limits stay fixed all week. |
+| Watch | Other names on today's fresh top 10. Not tested; for watching only. |
+| This week's tracker | Every day's top-10 list this week (saved in `journal/picks_log.csv`), with each stock's rank per day, its change since first picked and Nifty over the same days. |
+| Track record | Each weekly list's top 5 against Nifty since it was made: the live test of the model. |
+| Your stocks | Each stock you recorded: Hold, Sell or Bought today, a bar with the hard stop, exit line, buy price and last close, what you would make or lose if it exited now, the GTT stop-loss to keep in Kite, and how long trades usually last. |
 | Avoid | The weakest scores. Do not buy them. |
 | Events | Ideas only, not tested: results due this week, results just out, and important company news. Each card is coloured by the model's view of the stock. |
-| My real trades | Forms to record a buy or a sell, and your profit so far. |
-| Details | The market checks, what goes into the score, every stock's score, and how the model did in the past. |
+| Record a trade | Forms to record a buy or a sell; profit after charges and an estimate of the tax on closed trades. |
+| Details | The market checks, how the model did in the past, and every stock's score. |
 
-The **Market** and **Company** tabs give background on the market and on any one company.
+The **Market** tab shows the market checks over time, breadth (how many stocks are in an
+uptrend), sector strength, world markets and institutional buying. The **Company** tab shows
+where a stock stands for you (held, on a list, to avoid), its price with your levels, peers in
+the same industry, the business, owners, news and a rule-of-thumb scorecard.
 
 ## The model
 
@@ -67,7 +72,9 @@ combined with fixed weights, set by judgement and not tuned on past results:
 India VIX below 20, global markets, the rupee, crude oil, gold and 5-day FII buying. New
 buys only when at least half pass.
 
-**Buying.** Checked once a week. Up to 5 stocks, in equal amounts, from the top 10 scores.
+**Buying.** Checked once a week. Up to 5 stocks from the top 10 scores. Each gets an equal
+share of the money in a strong market and 75% of that share when the market is only
+"caution" (buying allowed but not strong).
 A stock is bought only if it is above its 20-day EMA and its results are not due within
 the next 5 days (counted from the day you buy).
 
@@ -85,22 +92,31 @@ Every setting is in `config.py` (`MODEL_STYLES` and `MODEL_WEIGHTS`).
 
 | | Growth a year | Worst fall |
 |---|---|---|
-| Kasauti | about +19% | about -21% |
+| Kasauti | about +19% | about -18% |
 | Nifty 50, bought and held | about +5% | about -16% |
 
-Not proven for real money. The history is under five years, most company data only
-covers the last few years, and the worst fall is just beyond the 20% limit this project
-set for itself. Every test, including the ones that failed, is recorded in the project's
+Not proven for real money. The history is under five years and most company data only
+covers the last few years. Results are sensitive to the settings (for example the exit-line
+length), so treat the figures as a rough guide. Every test, including the ones that failed, is recorded in the project's
 backtest log; the scripts are in `research/`.
 
 What was tested and kept:
+
+- **Smaller amounts in a caution market (75%).** Worst fall from -20.7% to -18.1%, smaller in
+  both halves of the history, for about 1 point less growth a year (`research/strength.py`).
 
 - **The 2% buy range.** Buying after the stock had already risen more than 2% from the
   signal close lost money. Buying below the signal close did well (`research/entry_gap.py`).
 - **No buying just before results.** Slightly better growth and a smaller worst fall in
   every setting tested.
 
-What was tested and rejected:
+What was tested and rejected (13 Oct 2026, `research/strength.py`, each mixed between the
+two halves of the history): selling before results, 4 / 6 / 8 stocks, a 6-12% stop or none,
+buying from the top 5 / 15 / 20, exit lines from 10 to 75 days, smaller amounts for
+high-swing stocks. Score groups: business, valuation and price each help; ownership helped in
+2022-24 and hurt in 2024-26; news and deals cannot be judged yet (only days of history).
+From every start date since 2022 the model beat Nifty by 10-25 points a year.
+
 
 - A lower limit on the buy range, limit orders at the signal close, skipping stocks close
   to their trend line or after a spike (`research/entry_quality.py`).
@@ -127,6 +143,8 @@ dashboard.py             the browser dashboard (Streamlit)
 trading/model.py         the model: every factor in one score per stock, market checks
 trading/rotation.py      the day-by-day simulation used to test the model
 trading/today.py         the Today page's lists: buy range, hold or sell, avoid, events
+trading/picks.py         each day's top-10 list, saved; the weekly list, tracker and track record
+trading/breadth.py       market breadth and sector strength for the Market tab
 trading/ui.py            the dashboard's look: colours, rows, price bars, cards
 trading/journal.py       your real trades (journal/real_trades.csv, not on GitHub)
 trading/update.py        refreshes all data; shared by update_data.py and the dashboard
@@ -192,8 +210,6 @@ which built it from NSE's inclusion/exclusion records. `update_data.py` download
 ## Not built yet
 
 - A link to the broker (Zerodha), so trades are recorded automatically.
-- Profit after tax.
-- An automatic record of each day's picks, to build a live track record.
 - Intraday trading (needs minute-by-minute prices).
 
 ## Without typing commands (Windows)

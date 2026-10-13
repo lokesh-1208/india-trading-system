@@ -196,3 +196,12 @@ def test_market_level_names_the_state_of_the_market():
     assert level == "strong" and "2 of 2" in note
     level, note = _model(-0.0005).market_level()
     assert level == "weak" and "cash" in note
+
+
+def test_caution_market_buys_get_a_smaller_amount():
+    built = _model()
+    rules = dict(config.MODEL_STYLES["swing"])
+    assert rules["caution_share"] == 0.75
+    share = built.amount_share()
+    assert share in (1.0, 0.75)
+    assert share == (1.0 if bool(built.strong_market().iloc[-1]) else 0.75)

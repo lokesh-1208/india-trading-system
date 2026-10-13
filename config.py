@@ -20,6 +20,10 @@ MARKET_DIR = DATA_DIR / "market"      # Nifty, India VIX, global indices
 REPORTS_DIR = ROOT / "reports"
 JOURNAL_FILE = ROOT / "journal" / "trades.csv"
 REAL_TRADES_FILE = ROOT / "journal" / "real_trades.csv"   # your real-money trades
+PICKS_LOG_FILE = ROOT / "journal" / "picks_log.csv"    # every day's top-10 list, kept as made
+DAILY_LIST_SIZE = 10
+SHORT_TERM_TAX = 0.20     # tax on gains from shares held under a year (rule in force in 2026;
+                          # check with your CA). Losses in the same year reduce taxable gains.
 
 # ------------------------------------------------------------------- data ---
 HISTORY_START = "2015-01-01"
@@ -166,7 +170,11 @@ MODEL_STYLES = {
     # max_gap: a buy is skipped if the stock opens more than 2% above the signal
     # close (backtest log, entry 7). No lower limit: buying below it did well.
     "swing": {"check": "week", "positions": 5, "keep_rank": 10, "buy_rank": 10,
-              "rank_exit": False, "stop_loss": 0.08, "trend_exit": True, "max_gap": 0.02},
+              "rank_exit": False, "stop_loss": 0.08, "trend_exit": True, "max_gap": 0.02,
+              # In a caution market (buying allowed but not strong) each new buy gets 75%
+              # of the normal amount. Tested 13 Oct 2026: worst fall -20.7% -> -18.1%,
+              # smaller in both halves of the history, growth 19.6% -> 18.7% a year.
+              "caution_share": 0.75},
     "monthly": {"check": "month", "positions": 10, "keep_rank": 20, "buy_rank": 20,
                 "rank_exit": True, "stop_loss": None, "trend_exit": False},
 }

@@ -4,14 +4,12 @@ Run:  streamlit run dashboard.py
 It reads the files that update_data.py downloaded, so run that first.
 """
 
-from html import escape
-
 import pandas as pd
 import streamlit as st
 
 import config
-from trading import (charts, company, data, flows, indicators, journal, model, news, report,
-                     rotation, today, ui, update)
+from trading import (breadth, charts, company, data, flows, indicators, journal, model, news,
+                     picks, report, rotation, today, ui, update)
 from trading.screens import Screens
 
 st.set_page_config(page_title="Kasauti", layout="wide")
@@ -47,6 +45,11 @@ def load_screens():
 def load_model():
     """The full model: every factor table, ready to score any day."""
     return model.from_disk(load_stocks(), load_nifty())
+
+
+def load_picks_log():
+    """Every day's top-10 list. Missing days of this week and last are made and saved."""
+    return picks.update_log(load_model())
 
 
 @st.cache_resource(show_spinner="Running the model through the past ...")
@@ -171,6 +174,34 @@ def market_page():
                         f"{config.MODEL_MARKET_MIN:.0%} of the known checks pass.")
         ui.checks([(name, {1.0: True, 0.0: False}.get(passed)) for name, passed in checks.items()])
         st.caption("– means not enough history is saved yet.")
+        history = (built.market_score * 100).rename("Checks passing").to_frame().tail(126)
+        show(charts.share_chart(history, "Share of market checks passing, last 6 months",
+                                guides=((config.MODEL_MARKET_MIN * 100, "buying allowed"),
+                                        (config.MODEL_STRONG_MARKET * 100, "strong"))))
+
+    wide = breadth.breadth(built.prepared["last_close"], built.prepared["liquid"])
+    now_fast = wide["above_20_ema_%"].iloc[-1]
+    with st.expander(f"Breadth: {now_fast:.0f}% of stocks above their {config.EMA_FAST}-day EMA"):
+        ui.section_note("How many of the liquid Nifty 500 stocks are in an uptrend. Above about "
+                        "60% the market is broadly healthy; below about 40% most stocks are "
+                        "falling, even if Nifty itself looks fine.")
+        show(charts.share_chart(wide.rename(columns={
+            "above_20_ema_%": f"Above {config.EMA_FAST}-day EMA",
+            "above_200_day_%": "Above 200-day average"}), "Market breadth, last 6 months",
+            guides=((50, "half"),)))
+
+    ranking = built.score_on(len(built.calendar) - 1)
+    sectors = breadth.sector_strength(ranking, built.prepared["last_close"],
+                                      built.trading["in_trend"].iloc[-1], built.industry)
+    if len(sectors):
+        with st.expander(f"Sectors: strongest {sectors.index[0]}, weakest {sectors.index[-1]}"):
+            ui.section_note("From the stocks the model scores, grouped by industry (at least 3 "
+                            "stocks). This shows why some industries fill the buy list.")
+            show(charts.sector_bars(sectors))
+            st.dataframe(sectors.rename(columns={
+                "stocks": "Stocks", "month_%": "Median 1-month change %",
+                "above_ema_%": f"% above {config.EMA_FAST}-day EMA",
+                "score": "Median model score"}), use_container_width=True)
 
     average = nifty["Close"].rolling(config.ROTATION_MARKET_SMA).mean()
     gap = nifty["Close"].iloc[-1] / average.iloc[-1] - 1
@@ -238,10 +269,44 @@ def company_page():
     ui.company_header(symbol, ", ".join(facts), float(last), float((last / before - 1) * 100),
                       view, rank, len(ranking))
 
+    # ---- where the stock stands for you ----
+    rules = config.MODEL_STYLES[config.MODEL_STYLE]
+    open_rows = journal.open_positions(journal.load())
+    log = load_picks_log()
+    list_day = log["list_day"].max() if len(log) else None
+    weekly = picks.weekly_list(log, list_day) if list_day is not None else log
+    todays_list = (set(log.loc[log["list_day"] == list_day, "symbol"])
+                   if list_day is not None else set())
+    weakest = set(ranking.tail(config.MODEL_WEAKEST).index)
+    stands, levels = [], []
+    if symbol in set(open_rows["symbol"]):
+        mine = open_rows[open_rows["symbol"] == symbol]
+        quantity = int(mine["quantity"].sum())
+        paid = float((mine["buy_price"] * mine["quantity"]).sum() / quantity)
+        hard_stop = paid * (1 - rules["stop_loss"])
+        exit_line = max(hard_stop, float(table["ema_fast"].iloc[-1]))
+        stands.append(("You hold it", f" {quantity} shares at Rs {paid:,.2f}. Sell on a close "
+                                      f"below Rs {exit_line:,.2f}"))
+        levels += [(paid, "Bought", charts.BLUE), (hard_stop, "Hard stop", charts.RED)]
+    if symbol in set(weekly["symbol"]):
+        on = weekly.set_index("symbol").loc[symbol]
+        limit = float(on["close"]) * (1 + (rules.get("max_gap") or 0))
+        stands.append(("On this week's list", f" rank {int(on['rank'])}, buy up to "
+                                              f"Rs {limit:,.2f}"))
+        levels.append((limit, "Buy up to", charts.AQUA))
+    elif symbol in todays_list:
+        stands.append(("On today's list", " not on this week's list, so watch only"))
+    if symbol in weakest:
+        stands.append(("On the avoid list", " one of the 10 weakest scores"))
+    if not stands:
+        stands.append(("Not on any list", f" rank {rank} of {len(ranking)}" if rank
+                       else " not scored by the model"))
+    ui.chips(stands)
+
     tiles = st.columns(6)
     cap = card["market_cap_crore"]
     cap_text = ("-" if cap is None or pd.isna(cap) else
-                f"Rs {cap / 1e5:,.1f} lakh cr" if cap >= 1e5 else f"Rs {cap:,.0f} cr")
+                f"Rs {cap / 1e5:,.1f}L cr" if cap >= 1e5 else f"Rs {cap:,.0f} cr")
     tiles[0].metric("From year high", pct(card["below_52w_high"]))
     tiles[1].metric("Market value", cap_text)
     tiles[2].metric("PE", num(card["pe"]), f"industry {num(card['industry_pe'])}",
@@ -281,12 +346,33 @@ def company_page():
         period = st.radio("Period", list(PERIODS), index=1, horizontal=True,
                           key="company_period", label_visibility="collapsed")
         recent = charts.last_days(table, PERIODS[period])
-        show(charts.price_chart(recent, f"{symbol}: closing price and trend lines"))
+        show(charts.add_levels(charts.price_chart(
+            recent, f"{symbol}: closing price and trend lines (the {config.EMA_FAST}-day EMA "
+                    "is the exit line)"), levels))
         left, right = st.columns(2)
         with left:
             show(charts.volume_chart(recent))
         with right:
             show(charts.rsi_chart(recent))
+
+    # ---- peers ----
+    industry_name = built.industry.get(symbol, "")
+    peers = [s for s in ranking.index if built.industry.get(s, "") == industry_name]
+    if industry_name and len(peers) > 1:
+        top = ranking.loc[peers].head(8)
+        trend_now = built.trading["in_trend"].iloc[-1]
+        with st.expander(f"Peers: {len(peers)} {industry_name} stocks the model scores"):
+            ui.section_note("The best-scored stocks in the same industry, to compare with.")
+            st.dataframe(pd.DataFrame({
+                "Rank": [list(ranking.index).index(s) + 1 for s in top.index],
+                "Stock": top.index, "Score": top["score"].round(0),
+                "Price": top["close"].round(2),
+                "6-month change %": (top["momentum"] * 100).round(1),
+                "Model view": [today.model_view(float(top.loc[s, "score"]),
+                                                bool(trend_now.get(s, False))) for s in top.index],
+                "This stock": ["◀" if s == symbol else "" for s in top.index],
+            }), hide_index=True, use_container_width=True,
+                column_config={"Score": SCORE_COLUMNS["score"]})
 
     # ---- business ----
     annual, quarterly = screens.company_rows(symbol), None
@@ -386,22 +472,25 @@ def company_page():
                          hide_index=True, use_container_width=True)
 
     # ---- scorecard ----
-    with st.expander(f"Scorecard: {company.score(card, financial)} of 10"):
+    with st.expander(f"Scorecard (a rule of thumb, not part of the model): "
+                     f"{company.score(card, financial)} of 10"):
         ui.checks(company.scorecard(card, financial))
-        st.caption("– means the figure is not available. The thresholds are rules of "
-                   "thumb and have not been proven by a backtest.")
+        st.caption("– means the figure is not available. These ten checks are common rules of "
+                   "thumb. They are not part of the model's score and have not been tested.")
 
 
-def _my_trades(trades, prices, symbols):
+def _my_trades(trades, prices, symbols, last_day=None):
     """Your real positions, with forms to record a buy and a sell."""
-    totals = journal.totals(trades, prices)
+    totals = journal.totals(trades, prices, last_day)
     one, two, three, four = st.columns(4)
     one.metric("Money in the market", f"Rs {totals['invested']:,.0f}")
-    two.metric("Worth now", f"Rs {totals['value']:,.0f}")
+    two.metric("Worth at the last close", f"Rs {totals['value']:,.0f}")
     three.metric("Gain on open positions", f"Rs {totals['open_gain']:+,.0f}")
-    four.metric("Profit on closed trades", f"Rs {totals['closed_profit']:+,.0f}")
+    four.metric("Closed trades, after charges", f"Rs {totals['closed_net']:+,.0f}",
+                f"tax about Rs {totals['tax_estimate']:,.0f}" if totals["tax_estimate"] else None,
+                delta_color="off")
 
-    positions = journal.open_positions(trades, prices)
+    positions = journal.open_positions(trades, prices, last_day)
     if len(positions):
         shown = positions[["symbol", "buy_date", "buy_price", "quantity", "cost",
                            "last_price", "value", "gain", "gain_%", "note"]].round(2)
@@ -440,9 +529,13 @@ def _my_trades(trades, prices, symbols):
     closed = journal.closed_trades(trades)
     if len(closed):
         with st.expander(f"Closed trades ({len(closed)})"):
-            st.dataframe(closed.round(2), hide_index=True, use_container_width=True)
+            st.dataframe(closed[["symbol", "buy_date", "buy_price", "sell_date", "sell_price",
+                                 "quantity", "profit", "charges", "net_profit", "profit_%",
+                                 "note"]].round(2), hide_index=True, use_container_width=True)
     st.caption("Saved in journal/real_trades.csv on this computer only. Keep your own "
-               "backup. Profit figures are before charges and tax.")
+               "backup. Open gains are before charges. Closed trades show Zerodha delivery "
+               f"charges; the tax estimate is {config.SHORT_TERM_TAX:.0%} short-term gains tax "
+               "on the year's net profit (losses offset gains). Check with your CA.")
 
 
 GROUP_NOTES = {
@@ -517,103 +610,225 @@ def today_page():
     due = today.results_soon(built.results, today.buy_day(now))
     positions = journal.open_positions(trades, prices)
     trend_lines = {symbol: float(trend[symbol].iloc[-1]) for symbol in held if symbol in trend}
-    mine = today.my_stocks(plan, positions, trend_lines)
+    mine = today.my_stocks(plan, positions, trend_lines, last_day=last_day)
     sells = mine[mine["action"] == "SELL"]
     money = st.session_state.get("_money", int(config.CAPITAL))
-    buys = today.buy_list(plan, money, results_due=due)
-    picks = buys[buys["type"] == "Pick"]
-    backups = buys[buys["type"] == "Backup"]
+    share = built.amount_share()
+    per_stock = money / rules["positions"] * share
 
-    to_buy = len(picks) if plan["market_ok"] else 0
+    # ---- the weekly list (tested), today's list (watch) and the record of every list ----
+    log = load_picks_log()
+    list_day = log["list_day"].max()
+    todays = log[log["list_day"] == list_day].copy()
+    weekly = picks.weekly_list(log, list_day)
+    places = max(0, rules["positions"] - len(held))
+    status = picks.weekly_status(weekly, prices, built.trading["in_trend"].iloc[-1], due,
+                                 set(held), places, above, budget=per_stock)
+    buy_now = status[status["status"] == "Buy"].head(places)
+    watch = todays[~todays["symbol"].isin(set(weekly["symbol"]) | set(held))]
+    week_rows, week_days = picks.tracker(log, list_day, close, nifty["Close"])
+    days_on = (dict(zip(week_rows["symbol"], week_rows["days_on"])) if len(week_rows) else {})
+    from_last_week = (dict(zip(week_rows["symbol"], week_rows["last_week"]))
+                      if len(week_rows) else {})
+    weekly_day = len(weekly) and weekly["list_day"].iloc[0] == list_day
+
     to_sell = len(sells)
-    if to_buy and to_sell:
-        headline = f"Buy {to_buy}, sell {to_sell}"
-    elif to_buy:
-        headline = f"Buy {to_buy} stock{'s' if to_buy != 1 else ''}, nothing to sell"
-    elif to_sell:
-        headline = f"Sell {to_sell}, nothing new to buy"
+    sell_text = f", sell {to_sell}" if to_sell else ""
+    if not plan["market_ok"]:
+        headline = f"Market weak: no new buys{sell_text}"
+    elif len(buy_now):
+        headline = (f"Buy {len(buy_now)} from the weekly list{sell_text}"
+                    + (f". Watch: {len(watch)} others" if len(watch) and not weekly_day else ""))
+    elif places == 0:
+        headline = f"All places filled: nothing to buy{sell_text}"
     else:
-        headline = "Nothing to do today"
-    note = (f"From the {last_day:%a %d %b} close. The model checks for new buys at the start "
-            "of each week and checks exits every day.")
+        headline = (f"No weekly pick is buyable today{sell_text}"
+                    + (f". Watch: {len(watch)} others" if len(watch) else ""))
+    week_start = weekly["list_day"].iloc[0] if len(weekly) else list_day
+    note = (f"Buy from the weekly list (made from the close before {week_start:%a %d %b}, the "
+            f"tested rule); the other names are on today's list from the {last_day:%a %d %b} "
+            "close, for watching. Exits are checked on every close.")
     ui.day_plan(headline, note, plan["market_level"], plan["market_note"])
     if plan["market_level"] != "strong":
         st.caption(plan["market_note"])
 
     show_what = st.session_state.get("_show", "Buy and sell")
+    buy_symbols = set(buy_now["symbol"])
 
-    def buy_rows(table, colour):
-        return [{
-            "symbol": row.symbol, "colour": colour,
-            "tag": None, "note": about(row.symbol, row.rank, row.score),
-            "chart": chart(row.symbol),
-            "middle": ui.ladder(row.entry * (1 - rules["stop_loss"]), row.entry, row.buy_up_to),
-            "right_top": f"{row.shares} shares",
-            "right_bottom": f"about Rs {row.amount:,.0f}",
-        } for row in table.itertuples()]
+    def weekly_rows(table):
+        rows = []
+        for row in table.itertuples():
+            shares = int(per_stock // row.limit)
+            if row.symbol in buy_symbols:
+                tag, colour = ("Buy" if row.kind == "Pick" else "Buy (backup)"), ui.BLUE
+                bottom = (f"about Rs {shares * row.close:,.0f}" if weekly_day
+                          else f"last close Rs {row.last:,.2f}, in range")
+            elif row.status == "Buy":
+                tag, colour, bottom = "Backup", ui.NEUTRAL, f"last close Rs {row.last:,.2f}"
+            else:
+                tag, colour = row.status, ui.NEUTRAL
+                bottom = {"Too costly": f"one share costs more than Rs {per_stock:,.0f}",
+                          "Missed": f"last close Rs {row.last:,.2f}, above the limit",
+                          "Trend broke": f"closed below its {config.EMA_FAST}-day EMA",
+                          "Results soon": "results within 5 days",
+                          "You hold": "see Your stocks"}.get(row.status, "")
+            rows.append({
+                "symbol": row.symbol, "colour": colour, "tag": tag,
+                "note": about(row.symbol, row.rank, row.score),
+                "chart": chart(row.symbol),
+                "middle": ui.ladder(row.close * (1 - rules["stop_loss"]), row.close, row.limit),
+                "right_top": f"{shares} shares",
+                "right_bottom": bottom,
+            })
+        return rows
 
-    # ---- to buy ----
+    def watch_rows(table):
+        rows = []
+        for row in table.itertuples():
+            limit = row.close * (1 + above)
+            shares = int(per_stock // limit)
+            on = days_on.get(row.symbol, 1)
+            tag = (f"Day {on} on list" if on > 1 else
+                   "Back from last week" if from_last_week.get(row.symbol) else "New today")
+            rows.append({
+                "symbol": row.symbol, "colour": ui.GOOD, "tag": tag,
+                "note": about(row.symbol, row.rank, row.score),
+                "chart": chart(row.symbol),
+                "middle": ui.ladder(row.close * (1 - rules["stop_loss"]), row.close, limit),
+                "right_top": f"{shares} shares",
+                "right_bottom": f"about Rs {shares * row.close:,.0f}",
+            })
+        return rows
+
     if show_what != "Sell only":
-        count = f"{len(picks)} stock{'s' if len(picks) != 1 else ''}" if plan["market_ok"] \
-            else "no new buys"
-        with st.expander(f"To buy: {count}", expanded=True):
+        # ---- buy: the weekly list ----
+        title = (f"Buy: this week's list, {len(buy_now)} to buy" if plan["market_ok"]
+                 else "Buy: this week's list, no new buys")
+        with st.expander(title, expanded=True):
             if not plan["market_ok"]:
                 ui.empty(plan["cash_text"])
-            elif len(picks):
-                ui.section_note(f"Buy at or below the limit. Stop-loss is "
-                                f"{rules['stop_loss']:.0%} under the price you pay. If a pick "
-                                "is already above its limit, take the first backup instead.")
-                ui.stock_rows(buy_rows(picks, ui.BLUE))
+            ui.section_note(f"The tested rule. The model holds {rules['positions']} stocks: "
+                            f"buy the ones marked Buy, at or below the limit. Limits stay fixed "
+                            f"all week. Stop-loss is {rules['stop_loss']:.0%} under the price "
+                            "you pay. "
+                            + (f"The market is not strong, so each buy uses {share:.0%} of the "
+                               f"normal amount: about Rs {per_stock:,.0f} instead of "
+                               f"Rs {money / rules['positions']:,.0f}." if share < 1 else
+                               f"Each buy uses about Rs {per_stock:,.0f}."))
+            if len(status):
+                ui.stock_rows(weekly_rows(status))
             else:
-                ui.empty("Nothing new to buy: your holdings fill all the places.")
-            notes = []
-            if plan["market_ok"] and not plan["due_next_session"]:
-                notes.append(f"These picks are from the weekly check on "
-                             f"{plan['decided_on']:%d %b}. Mid-week, buy only if the price is "
-                             "still inside the range.")
+                ui.empty("No weekly list yet.")
             left_out = [f"{symbol} ({date:%a %d %b})" for symbol, date in sorted(due.items())
                         if symbol in set(plan["today"].index[:20])]
+            notes = []
             if left_out:
                 notes.append("Left out because results are due within "
                              f"{config.RESULTS_BLOCK_DAYS} days: " + ", ".join(left_out) + ".")
-            notes.append(f"The bar shows the stop-loss, the signal close (dot) and the buy "
-                         f"limit, {above:.0%} above it. There is no lower limit: in the tests, "
-                         "stocks bought below the signal close did best. The chart is the last "
-                         f"4 months, with the {config.EMA_FAST}-day EMA dotted.")
+            notes.append("Best time to buy: the first open of the week, with an AMO limit order "
+                         "at the limit placed the evening before. Buying later in the week gave "
+                         "about the same return in the tests but a deeper worst fall (about "
+                         f"-29% against -21%). The bar shows the stop-loss, the signal close "
+                         f"(dot) and the buy limit, {above:.0%} above it.")
             st.caption(" ".join(notes))
 
-        if len(backups):
-            with st.expander(f"Backups: {len(backups)} stocks"):
-                ui.section_note("Use them in order when a pick is already above its limit.")
-                ui.stock_rows(buy_rows(backups, ui.NEUTRAL))
+        # ---- watch: other names on today's list ----
+        if len(watch) and not weekly_day:
+            with st.expander(f"Watch: {len(watch)} other names on today's list (not tested)"):
+                ui.section_note(f"On today's top {len(todays)} from the {last_day:%a %d %b} close "
+                                "but not on this week's list. In the tests, buying new picks "
+                                "every day did worse than buying weekly (about +12% a year "
+                                "against +20%). Strong ones are likely to be on next week's "
+                                "list.")
+                ui.stock_rows(watch_rows(watch))
+
+        # ---- the week tracker ----
+        if len(week_rows):
+            on_today = int(week_rows["on_today"].sum())
+            with st.expander(f"This week's tracker: {len(week_rows)} stocks picked, "
+                             f"{on_today} on today's list", expanded=True):
+                ui.section_note("Every list this week, saved as it was made. The number is "
+                                "the stock's rank on that day's list.")
+                ui.tracker_table(week_rows.to_dict("records"), week_days, list_day)
+                st.caption("Since first picked: from the close the stock was first picked on "
+                           "(this week or last) to the latest close. Nifty: Nifty 50 over the "
+                           "same days. Lists made before the record started on 13 Oct were "
+                           "rebuilt from saved data.")
+
+        card = picks.list_scorecard(log, close, nifty["Close"], top=rules["positions"])
+        if len(card):
+            ahead = int((card["vs_nifty"] > 0).sum())
+            with st.expander(f"Track record: {ahead} of {len(card)} weekly lists ahead of Nifty"):
+                ui.section_note(f"Each weekly list's top {rules['positions']} picks, from the "
+                                "close they were picked on to the latest close, against Nifty "
+                                "over the same days. This grows into the live test of the model.")
+                st.dataframe(pd.DataFrame({
+                    "Week of": card["list_day"].dt.strftime("%a %d %b %Y"),
+                    "Picks": card["picks"], "Picks, average %": card["average_%"],
+                    "Nifty %": card["nifty_%"], "Ahead of Nifty (points)": card["vs_nifty"],
+                }), hide_index=True, use_container_width=True)
+                st.caption("Lists before 13 Oct 2026 were rebuilt from saved data, not saved "
+                           "at the time; judge the model on the ones saved from then on.")
 
     # ---- your stocks ----
     if show_what != "Buy only":
+        waiting = int((mine["action"] == "WAIT").sum()) if len(mine) else 0
         if len(mine) == 0:
             title = "Your stocks: none recorded"
         elif len(sells):
             title = f"Your stocks: {len(mine)}, sell {len(sells)}"
         else:
-            title = f"Your stocks: {len(mine)}, all hold"
+            title = (f"Your stocks: {len(mine)}, all hold" if not waiting else
+                     f"Your stocks: {len(mine)}, {waiting} bought today")
         with st.expander(title, expanded=len(mine) > 0):
             if len(mine) == 0:
                 ui.empty("After you buy, add it under 'Record a trade' and it shows here, "
                          "marked Hold or Sell each day.")
             else:
-                ui.stock_rows([{
-                    "symbol": row["symbol"], "tag": row["action"].capitalize(),
-                    "colour": ui.SELL if row["action"] == "SELL" else ui.GOOD,
-                    "note": f"{row['quantity']} shares bought at Rs {row['buy_price']:,.2f}",
-                    "chart": chart(row["symbol"]),
-                    "middle": ("<span style='font-size:0.86rem'>"
-                               + escape(row["reason"].capitalize()) + "</span>"),
-                    "right_top": f"Rs {row['last_price']:,.2f}  {row['gain_%']:+.1f}%",
-                    "right_bottom": "Sell on a close below Rs "
-                                    f"{max(row['stop_loss'], row['trend_line']):,.2f}",
-                } for row in mine.to_dict("records")])
-                st.caption(f"Sell at the next open after a close below the {config.EMA_FAST}-day "
-                           f"EMA or {rules['stop_loss']:.0%} below your buy price, whichever "
-                           "comes first.")
+                rows = []
+                for row in mine.to_dict("records"):
+                    new_buy = row["action"] == "WAIT"
+                    tag, colour = {"SELL": ("Sell", ui.SELL), "WAIT": ("Bought today", ui.NEUTRAL)
+                                   }.get(row["action"], ("Hold", ui.GOOD))
+                    exit_line = row["trend_line"]
+                    rows.append({
+                        "symbol": row["symbol"], "tag": tag, "colour": colour,
+                        "note": (f"{row['quantity']} shares at Rs {row['buy_price']:,.2f}, "
+                                 f"bought {row['bought']:%a %d %b}"),
+                        "chart": chart(row["symbol"]),
+                        "middle": ui.holding_ladder(row["stop_loss"], exit_line, row["buy_price"],
+                                                    float("nan") if new_buy else row["last_price"]),
+                        "right_top": ("Not checked yet" if new_buy else
+                                      f"Rs {row['last_price']:,.2f}  {row['gain_%']:+.1f}%"),
+                        "right_bottom": ("Checked after today's close" if new_buy else
+                                         f"Day {row['days_held']} of holding" if row["action"] != "SELL"
+                                         else row["reason"].capitalize()),
+                        "foot": [
+                            (("Profit locked in" if row["exit_pct"] > 0 else "If it exits now"),
+                             f"{row['exit_pct']:+.1f}% ({'+' if row['exit_rs'] >= 0 else '-'}"
+                             f"Rs {abs(row['exit_rs']):,.0f}) on a close below "
+                             f"Rs {row['exit_line']:,.2f}",
+                             "up" if row["exit_pct"] > 0 else "down"),
+                            ("GTT stop-loss in Kite",
+                             (f"Rs {row['gtt']:,.2f}, your buy price. Move it up from the "
+                              f"hard stop (Rs {row['stop_loss']:,.2f})."
+                              if row["gtt"] > row["stop_loss"] else
+                              f"Rs {row['gtt']:,.2f} (-{rules['stop_loss']:.0%}). Safety net "
+                              "if a check is missed.")),
+                            ("Target", "None. The exit line rises with the stock and becomes "
+                                       "a profit exit once it passes your buy price."),
+                            ("Holding", "Typical: 2 weeks. Losers often go within a week, "
+                                        "winners can run 4 weeks or more."),
+                        ],
+                    })
+                ui.stock_rows(rows)
+                st.caption("The bar shows the hard stop (red), the exit line (today's "
+                           f"{config.EMA_FAST}-day EMA: amber below your buy price, green above "
+                           "it), your buy price (ring) and the last close (dot). In the tests, 296 of 335 trades ended on the trend exit and "
+                           "only 10 on the hard stop. Winners were fewer than losers (39% won) "
+                           "but much bigger (median +5.7% against -3.0%); capping winners at a "
+                           "target of +10% would have cut the average trade from +1.75% to "
+                           "about 0%.")
 
         avoid = today.avoid_list(plan)
         with st.expander(f"Avoid: {len(avoid)} weakest scores"):
@@ -650,7 +865,7 @@ def today_page():
 
     # ---- record trades ----
     with st.expander("Record a trade, and your profit so far"):
-        _my_trades(trades, prices, sorted(load_stocks()))
+        _my_trades(trades, prices, sorted(load_stocks()), last_day)
 
     # ---- details ----
     known = plan["checks"].dropna()
@@ -788,6 +1003,13 @@ with st.sidebar.expander("More data options"):
     st.caption("Re-read saved files after the evening update has run by itself while this "
                "page was open.")
 
+ui.side_heading("Your routine")
+ui.routine([
+    ("Evening, after 4 pm", "Update data. In Your stocks, sell tomorrow at the open if it "
+                            "says Sell; move a GTT up if it says so."),
+    ("Sunday or Monday early", "Place AMO limit buys at the limits of the weekly list."),
+    ("Any day", "Record every buy and sell under Record a trade."),
+])
 st.sidebar.caption("Light or dark: open the ⋮ menu at the top right, then Settings.")
 
 PAGES[page]()

@@ -14,6 +14,7 @@ range is "anything up to signal close + 2%", with no lower limit.
 import math
 import re
 
+import numpy as np
 import pandas as pd
 
 import config
@@ -58,8 +59,12 @@ def buy_list(plan, money, count=10, results_due=None):
     stop = style["stop_loss"]
     per_stock = money / style["positions"]
     held = set(plan["keep"]) | set(plan["sell"])
-    in_trend = plan.get("in_trend", {})
-    today = plan["today"]
+    # Picks, signal prices and limits come from the weekly check day and do not move
+    # during the week. Buying on any day was tested and did worse than buying weekly.
+    in_trend = plan.get("signal_in_trend", plan.get("in_trend", {}))
+    today = plan.get("signal_scores", plan["today"])
+    last_prices = plan.get("last_price", {})
+    trend_now = plan.get("in_trend", {})
     results_due = results_due or {}
     picks_wanted = len(plan["buy"]) if plan["market_ok"] else 0
 
@@ -76,6 +81,8 @@ def buy_list(plan, money, count=10, results_due=None):
             continue
         up_to = entry * (1 + above)
         shares = math.floor(per_stock / up_to)
+        last = last_prices.get(symbol, entry) if hasattr(last_prices, "get") else entry
+        last = float(last) if last == last else entry
         rows.append({
             "rank": rank,
             "symbol": symbol,
@@ -86,20 +93,26 @@ def buy_list(plan, money, count=10, results_due=None):
             "stop_loss": round(entry * (1 - stop), 2),
             "shares": shares,
             "amount": round(shares * entry),
+            "last": round(last, 2),
+            "in_range": last <= up_to,
+            "trend_ok": bool(trend_now.get(symbol, True)),
         })
     table = pd.DataFrame(rows, columns=["rank", "symbol", "score", "type", "entry",
-                                        "buy_up_to", "stop_loss", "shares", "amount"])
+                                        "buy_up_to", "stop_loss", "shares", "amount",
+                                        "last", "in_range", "trend_ok"])
     # Picks first, then backups, each in score order.
     order = table["type"].map({"Pick": 0, "Backup": 1})
     return table.assign(_order=order).sort_values(["_order", "rank"]).drop(
         columns="_order").reset_index(drop=True)
 
 
-def my_stocks(plan, positions, trend_lines):
+def my_stocks(plan, positions, trend_lines, last_day=None):
     """Your open positions with what to do about each.
 
     positions: journal.open_positions(trades, prices).
     trend_lines: {symbol: today's 20-day EMA}.
+    last_day: the date of the latest close. A stock bought after it has no close
+    since the buy yet, so it is marked WAIT and shows no gain.
     """
     stop = rules()["stop_loss"]
     stopped, broken = set(plan.get("stopped", [])), set(plan.get("trend_broken", []))
@@ -107,10 +120,18 @@ def my_stocks(plan, positions, trend_lines):
     rows = []
     if len(positions):
         grouped = positions.groupby("symbol").agg(
-            quantity=("quantity", "sum"), cost=("cost", "sum"), last_price=("last_price", "last"))
+            quantity=("quantity", "sum"), cost=("cost", "sum"), last_price=("last_price", "last"),
+            bought=("buy_date", "min"))
         for symbol, row in grouped.iterrows():
             paid = row["cost"] / row["quantity"]
-            if symbol in stopped:
+            bought = pd.Timestamp(row["bought"]).normalize()
+            new = last_day is not None and bought > pd.Timestamp(last_day).normalize()
+            days = 0 if (last_day is None or new) else int(
+                np.busday_count(bought.date(), pd.Timestamp(last_day).date()))
+            if new:
+                action, reason = "WAIT", ("bought after the latest close; first check after "
+                                          "today's close")
+            elif symbol in stopped:
                 action, reason = "SELL", f"{stop:.0%} or more below your buy price (stop-loss)"
             elif symbol in broken:
                 action, reason = "SELL", f"closed below its {config.EMA_FAST}-day EMA (trend broke)"
@@ -123,12 +144,25 @@ def my_stocks(plan, positions, trend_lines):
                 "symbol": symbol, "action": action, "reason": reason,
                 "quantity": int(row["quantity"]), "buy_price": round(paid, 2),
                 "last_price": round(float(row["last_price"]), 2),
-                "gain_%": round((row["last_price"] / paid - 1) * 100, 1),
+                "gain_%": (float("nan") if new
+                           else round((row["last_price"] / paid - 1) * 100, 1)),
                 "stop_loss": round(paid * (1 - stop), 2),
                 "trend_line": round(float(trend_lines.get(symbol, float("nan"))), 2),
+                "bought": bought, "days_held": days,
             })
+            line = rows[-1]["trend_line"]
+            exit_line = max(rows[-1]["stop_loss"], line) if line == line else rows[-1]["stop_loss"]
+            rows[-1]["exit_line"] = round(exit_line, 2)
+            rows[-1]["exit_pct"] = round((exit_line / paid - 1) * 100, 1)
+            rows[-1]["exit_rs"] = round((exit_line - paid) * row["quantity"])
+            # The GTT stop-loss is a safety net for a missed check. It stays at the hard stop
+            # until the exit line passes the buy price; then moving it up to the buy price
+            # stops a forgotten check from turning a profit into a loss.
+            rows[-1]["gtt"] = round(paid if exit_line > paid else rows[-1]["stop_loss"], 2)
     return pd.DataFrame(rows, columns=["symbol", "action", "reason", "quantity", "buy_price",
-                                       "last_price", "gain_%", "stop_loss", "trend_line"])
+                                       "last_price", "gain_%", "stop_loss", "trend_line",
+                                       "bought", "days_held", "exit_line", "exit_pct",
+                                       "exit_rs", "gtt"])
 
 
 def avoid_list(plan):

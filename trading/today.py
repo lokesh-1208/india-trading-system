@@ -1,6 +1,6 @@
 """Everything for one trading day, from the one model (full model, swing style).
 
-The dashboard's Today page shows three lists built here:
+The app's Today page shows three lists built here:
   buy_list   - the best 10 stocks to buy, with a buy range and a stop-loss
   my_stocks  - the stocks you hold (from the journal), each HOLD or SELL with the reason
   avoid_list - the weakest scores: do not buy, and exit if you hold one

@@ -9,7 +9,7 @@ Run:  python update_data.py
 Run it once a day after the market closes; it usually takes 1-2 minutes.
 The full price history is downloaded once a week by itself (about 6 minutes).
 Company results are downloaded only for companies that just reported.
-The dashboard's "Update data now" button does the same thing.
+The app's "Update data" button does the same thing.
 """
 
 import argparse

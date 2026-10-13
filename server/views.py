@@ -2,7 +2,7 @@
 
 Every function here reads from the shared store and returns dictionaries and
 lists of numbers and text. The decisions themselves come from the trading
-package, exactly as on the old dashboard; nothing is decided here.
+package; nothing is decided here.
 """
 
 import math

@@ -1,6 +1,6 @@
 """Before the market opens: what happened since yesterday's close.
 
-Run in the morning (the dashboard button, or the 9:10 am scheduled update).
+Run in the morning (the app's button, or the 9:10 am scheduled update).
 Not part of the tested model. It collects:
   1. Global markets overnight: how the US closed, how Asia is trading, US
      futures, crude, gold, the rupee and India VIX, with a one-line guess of

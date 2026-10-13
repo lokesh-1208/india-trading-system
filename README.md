@@ -33,8 +33,6 @@ The first download takes a few minutes.
 4. **After you buy or sell:** record it under **Trades**. From then on the Today page tells
    you each day whether to hold it or sell it.
 
-The older Streamlit dashboard (`start_dashboard.bat`) still works and shows the same data.
-
 ## The web app
 
 | Page | What it shows |
@@ -56,24 +54,14 @@ no data).
 
 ## The Today page
 
-| Part | What it shows |
-|---|---|
-| Market strip | Nifty 50, India VIX, USD/INR, Brent crude, gold and the S&P 500, with the day's change. |
-| Headline | What to do today, for example "Buy 3 from the weekly list. Watch: 4 others", and the market mood: strong, caution or weak. |
-| Buy: this week's list | The tested list, made from the close before the first trading day of the week. Each stock is marked Buy, Buy (backup), Missed (above its limit), Trend broke, Results soon, Too costly or You hold. Limits stay fixed all week. |
-| Watch | Other names on today's fresh top 10. Not tested; for watching only. |
-| This week's tracker | Every day's top-10 list this week (saved in `journal/picks_log.csv`), with each stock's rank per day, its change since first picked and Nifty over the same days. |
-| Track record | Each weekly list's top 5 against Nifty since it was made: the live test of the model. |
-| Your stocks | Each stock you recorded: Hold, Sell or Bought today, a bar with the hard stop, exit line, buy price and last close, what you would make or lose if it exited now, the GTT stop-loss to keep in Kite, and how long trades usually last. |
-| Avoid | The weakest scores. Do not buy them. |
-| Events | Ideas only, not tested: results due this week, results just out, and important company news. Each card is coloured by the model's view of the stock. |
-| Record a trade | Forms to record a buy or a sell; profit after charges and an estimate of the tax on closed trades. |
-| Details | The market checks, how the model did in the past, and every stock's score. |
-
-The **Market** tab shows the market checks over time, breadth (how many stocks are in an
-uptrend), sector strength, world markets and institutional buying. The **Company** tab shows
-where a stock stands for you (held, on a list, to avoid), its price with your levels, peers in
-the same industry, the business, owners, news and a rule-of-thumb scorecard.
+The buy list is the tested one: made from the close before the first trading day of the
+week, with limits fixed all week. Each stock on it is shown as Buy, Backup, Missed (above
+its limit), Trend broke, Results soon, Too costly or You hold. Your stocks show Hold, Sell
+or Bought today, the close that would trigger a sell, what you would make or lose if it
+exited now, and the GTT stop-loss to keep in Kite. The week tracker shows every day's
+top-10 list this week (saved in `journal/picks_log.csv`) with each stock's change since it
+was first picked against Nifty. Before the open, news ideas and market mood are for
+context: they are not buy or sell signals.
 
 ## The model
 
@@ -149,7 +137,7 @@ From every start date since 2022 the model beat Nifty by 10-25 points a year.
 
 | Command | What it does |
 |---|---|
-| `streamlit run dashboard.py` | Opens the dashboard. Its **Update data now** button does the same job as `update_data.py`. |
+| `start_kasauti.bat` | Opens the app. Its **Update data** button does the same job as `update_data.py`. |
 | `python update_data.py` | Downloads prices for about 800 stocks, index membership history, Nifty, India VIX, global markets, the rupee, crude, gold, company announcements, FII/DII figures, bulk and block deals, results of companies that just reported, and (weekly) shareholding into `data/`. Daily prices come from NSE's day file; the full Yahoo history is downloaded once a week. |
 | `python research/full_model.py` | Runs the model through the past and prints its results and today's scores. |
 | `python research/entry_gap.py` | The buy-range test. |
@@ -161,15 +149,15 @@ From every start date since 2022 the model beat Nifty by 10-25 points a year.
 
 ```
 config.py                all settings: model weights, trading rules, risk limits, charges
-dashboard.py             the browser dashboard (Streamlit)
+server/                  the app's local web server (FastAPI): what each page shows
+web/                     the app's page (React, TypeScript); web/dist is the built page
 trading/model.py         the model: every factor in one score per stock, market checks
 trading/rotation.py      the day-by-day simulation used to test the model
 trading/today.py         the Today page's lists: buy range, hold or sell, avoid, events
 trading/picks.py         each day's top-10 list, saved; the weekly list, tracker and track record
-trading/breadth.py       market breadth and sector strength for the Market tab
-trading/ui.py            the dashboard's look: colours, rows, price bars, cards
+trading/breadth.py       market breadth and sector strength (not shown in the app yet)
 trading/journal.py       your real trades (journal/real_trades.csv, not on GitHub)
-trading/update.py        refreshes all data; shared by update_data.py and the dashboard
+trading/update.py        refreshes all data; shared by update_data.py and the app
 trading/data.py          downloads and loads prices and index membership
 trading/indicators.py    EMA, RSI, ATR
 trading/fundamentals.py  company results, ratios, results dates, which companies are due
@@ -185,7 +173,6 @@ trading/flows.py         daily FII/DII buying and selling, bulk and block deals
 trading/nse.py           opens a session with the NSE website
 trading/company.py       the company card
 trading/charges.py       Zerodha delivery charges
-trading/charts.py        the dashboard's charts
 trading/shorts.py        the short-selling test (failed; kept for reference)
 trading/backtest.py, strategy.py, screens.py, report.py   the first rule set (reference only)
 research/                scripts behind every test in the backtest log
@@ -248,7 +235,6 @@ member from one year ago, so it appears in today's list while older backtests le
 
 - `start_kasauti.bat`: double-click to open the app. Right-click it and choose
   "Send to > Desktop (create shortcut)" to get a desktop icon.
-- `start_dashboard.bat`: the older Streamlit dashboard.
 - `schedule_daily_update.bat`: double-click once. Windows will then download the latest
   data every weekday at 6:30 pm, and refresh the before-the-open data at 9:10 am (the
   laptop must be on). The log is `reports/update_log.txt`.

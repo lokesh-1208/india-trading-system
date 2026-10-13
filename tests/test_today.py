@@ -53,9 +53,9 @@ def test_list_stops_at_the_count():
     assert len(today.buy_list(_plan(), 100_000, count=3)) == 3
 
 
-def _positions(symbol="HELD", paid=300.0, last=310.0):
+def _positions(symbol="HELD", paid=300.0, last=310.0, bought="2026-10-01"):
     return pd.DataFrame({"symbol": [symbol], "quantity": [10], "cost": [paid * 10],
-                         "last_price": [last]})
+                         "last_price": [last], "buy_date": [bought]})
 
 
 def test_a_healthy_holding_is_held_with_its_stop_and_trend_line():
@@ -194,3 +194,53 @@ def test_event_cards_group_by_stock_and_put_holdings_and_strong_first():
     by = {c["symbol"]: c for c in cards}
     assert by["UP"]["worth"] and by["MID"]["worth"] and not by["LOW"]["worth"]
     assert len(by["LOW"]["events"]) == 1                 # the repeated filing is shown once
+
+
+def test_mid_week_the_signal_day_prices_and_limits_stay_fixed():
+    plan = _plan()
+    plan["signal_scores"] = plan["today"].copy()
+    plan["today"] = plan["today"].assign(close=plan["today"]["close"] * 1.05)   # prices ran
+    plan["last_price"] = plan["today"]["close"]
+    row = today.buy_list(plan, 100_000).set_index("symbol").loc["AAA"]
+    assert row["entry"] == 1158.0 and row["buy_up_to"] == round(1158 * 1.02, 2)
+    assert row["last"] == round(1158 * 1.05, 2) and not row["in_range"]
+
+
+def test_a_pick_still_below_its_limit_is_in_range():
+    plan = _plan()
+    plan["last_price"] = plan["today"]["close"] * 1.01
+    assert today.buy_list(plan, 100_000).set_index("symbol").loc["AAA", "in_range"]
+
+
+def test_a_pick_that_closed_below_its_trend_line_is_marked():
+    plan = _plan()
+    plan["signal_scores"] = plan["today"].copy()
+    plan["signal_in_trend"] = pd.Series({sym: True for sym in plan["today"].index})
+    plan["in_trend"] = pd.Series({sym: sym != "AAA" for sym in plan["today"].index})
+    rows = today.buy_list(plan, 100_000).set_index("symbol")
+    assert not rows.loc["AAA", "trend_ok"] and rows.loc["BBB", "trend_ok"]
+
+
+def test_a_stock_bought_after_the_latest_close_waits_and_shows_no_gain():
+    row = today.my_stocks(_plan(), _positions(bought="2026-10-13"), {"HELD": 290.0},
+                          last_day=pd.Timestamp("2026-10-12")).iloc[0]
+    assert row["action"] == "WAIT" and pd.isna(row["gain_%"]) and row["days_held"] == 0
+
+
+def test_days_held_counts_trading_days_since_the_buy():
+    row = today.my_stocks(_plan(), _positions(bought="2026-10-05"), {"HELD": 290.0},
+                          last_day=pd.Timestamp("2026-10-12")).iloc[0]
+    assert row["action"] == "HOLD" and row["days_held"] == 5 and row["gain_%"] == 3.3
+
+
+def test_exit_now_shows_the_loss_while_the_exit_line_is_below_the_buy_price():
+    row = today.my_stocks(_plan(), _positions(paid=300.0, last=310.0), {"HELD": 290.0},
+                          last_day=pd.Timestamp("2026-10-12")).iloc[0]
+    assert row["exit_line"] == 290.0 and row["exit_pct"] == -3.3 and row["exit_rs"] == -100
+    assert row["gtt"] == 276.0                      # still the hard stop
+
+
+def test_profit_is_locked_once_the_exit_line_passes_the_buy_price():
+    row = today.my_stocks(_plan(), _positions(paid=300.0, last=340.0), {"HELD": 320.0},
+                          last_day=pd.Timestamp("2026-10-12")).iloc[0]
+    assert row["exit_pct"] == 6.7 and row["exit_rs"] == 200 and row["gtt"] == 300.0

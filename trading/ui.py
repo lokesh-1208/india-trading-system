@@ -227,6 +227,33 @@ section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:has(input
 .co-price b {{ display: block; font-size: 1.6rem; font-weight: 600; color: {BRIGHT}; }}
 .co-tags {{ display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }}
 
+/* week tracker */
+.trk {{ width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.88rem;
+        background: {PANEL}; border: 1px solid {BORDER}; border-radius: 10px; overflow: hidden; }}
+.trk th {{ text-align: center; font-weight: 500; color: {MUTED}; padding: 9px 10px;
+           border-bottom: 1px solid {BORDER}; white-space: nowrap; }}
+.trk th:first-child, .trk td:first-child {{ text-align: left; }}
+.trk td {{ text-align: center; padding: 9px 10px; border-top: 1px solid {LINE}; color: {TEXT};
+           white-space: nowrap; }}
+.trk tr:first-child td {{ border-top: none; }}
+.trk td b {{ color: {BRIGHT}; font-weight: 600; }}
+.trk .on {{ display: inline-block; min-width: 26px; border-radius: 6px; padding: 1px 6px;
+            background: color-mix(in srgb, {BLUE} 14%, transparent); color: {BLUE}; font-weight: 600; }}
+.trk .off {{ color: {BORDER}; }}
+.trk .gone td {{ color: {MUTED}; }}
+.trk-muted {{ color: {MUTED}; font-size: 0.8rem; }}
+
+.row-foot {{ grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, 1fr);
+             gap: 10px; margin: 2px 0 0 58px; padding-top: 10px; border-top: 1px dashed {LINE}; }}
+.row-foot div {{ font-size: 0.82rem; color: {TEXT}; line-height: 1.4; }}
+.row-foot span {{ display: block; color: {MUTED}; font-size: 0.75rem; margin-bottom: 1px; }}
+.row-foot b {{ font-weight: 600; }}
+@media (max-width: 900px) {{ .row-foot {{ grid-template-columns: 1fr 1fr; margin-left: 0; }} }}
+
+.routine {{ font-size: 0.82rem; color: {TEXT}; line-height: 1.45; margin-bottom: 12px; }}
+.routine div {{ margin-bottom: 8px; }}
+.routine b {{ display: block; color: {BRIGHT}; font-weight: 600; }}
+
 /* yes / no checks */
 .checks {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
            column-gap: 28px; }}
@@ -461,7 +488,13 @@ def stock_rows(rows):
             f'<div class="spark">{row.get("chart", "")}</div>'
             f'<div class="ladder">{row.get("middle", "")}</div>'
             f'<div class="order"><b>{escape(row["right_top"])}</b>'
-            f'<span>{escape(row["right_bottom"])}</span></div></div>')
+            f'<span>{escape(row["right_bottom"])}</span></div>'
+            + ('<div class="row-foot">' + "".join(
+                f'<div><span>{escape(item[0])}</span>'
+                + (f'<b class="{item[2]}">{escape(item[1])}</b>' if len(item) > 2
+                   else escape(item[1])) + '</div>'
+                for item in row["foot"]) + '</div>' if row.get("foot") else "")
+            + '</div>')
     html(f'<div class="rows">{"".join(out)}</div>')
 
 
@@ -508,3 +541,75 @@ def company_header(symbol, facts, price, change, view, rank, total):
          f'{change:+.2f}%</span></b><div class="co-tags">'
          f'<span class="mood" style="--c:{colour}">{escape(view.capitalize())}</span>{rank_tag}'
          f'</div></div></div>')
+
+
+def tracker_table(rows, days, today_day):
+    """The week tracker: a column per list day, the stock's rank where it was on the list."""
+    head = (["Stock", "Last week"] + [f"{d:%a %d}" for d in days]
+            + ["Since first picked", "Nifty", "Vs Nifty", "Today"])
+    out = ["<table class='trk'><thead><tr>" + "".join(f"<th>{escape(h)}</th>" for h in head)
+           + "</tr></thead><tbody>"]
+    for row in rows:
+        cells = [f"<b>{escape(row['symbol'])}</b>",
+                 "<span class='on'>✓</span>" if row["last_week"] else "<span class='off'>·</span>"]
+        for day in days:
+            rank = row["ranks"].get(day)
+            cells.append(f"<span class='on'>{rank}</span>" if rank else "<span class='off'>·</span>")
+        move = row["since_first_%"]
+        cls = "up" if move >= 0 else "down"
+        cells.append(f"<span class='{cls}'>{move:+.1f}%</span> "
+                     f"<span class='trk-muted'>since {row['first_day']:%a %d}</span>")
+        nifty, edge = row.get("nifty_%"), row.get("vs_nifty")
+        cells.append("–" if nifty is None or nifty != nifty else f"{nifty:+.1f}%")
+        if edge is None or edge != edge:
+            cells.append("–")
+        else:
+            cells.append(f"<span class='{'up' if edge >= 0 else 'down'}'>{edge:+.1f}</span>")
+        if row["on_today"]:
+            status = (f"On list {row['days_on']} days" if row["days_on"] > 1
+                      else ("New today" if not row["last_week"] else "Back on list"))
+        else:
+            status = "Dropped off"
+        cells.append(escape(status))
+        css = "" if row["on_today"] else " class='gone'"
+        out.append(f"<tr{css}>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+    out.append("</tbody></table>")
+    html("".join(out))
+
+
+def holding_ladder(stop, trend, bought, last, width=300):
+    """Hard stop, trend exit, buy price and last price on one bar."""
+    values = [v for v in (stop, trend, bought, last) if v == v]
+    low, high = min(values), max(values)
+    pad = (high - low) * 0.06 or 1.0
+    low, high = low - pad, high + pad
+
+    def x(value):
+        return 8 + (value - low) / (high - low) * (width - 16)
+    xs, xb = x(stop), x(bought)
+    parts = [f'<svg viewBox="0 0 {width} 46" role="img" aria-label="hard stop {stop:.2f}, '
+             f'trend exit {trend:.2f}, bought {bought:.2f}">',
+             f'<rect x="{xs:.1f}" y="15" width="{x(high - pad) - xs:.1f}" height="6" rx="3" '
+             f'fill="{NEUTRAL}" opacity="0.18"/>',
+             f'<rect x="{xs - 1:.1f}" y="10" width="2" height="16" fill="{BAD}"/>',
+             f'<text x="{xs:.1f}" y="40" text-anchor="start">Stop {_num(stop)}</text>']
+    if trend == trend:
+        xt = x(trend)
+        mark = GOOD if trend > bought else "#d9930d"
+        parts += [f'<rect x="{xt - 1:.1f}" y="10" width="2" height="16" fill="{mark}"/>',
+                  f'<text x="{xt:.1f}" y="8" text-anchor="middle">Exit line {_num(trend)}</text>']
+    parts += [f'<circle cx="{xb:.1f}" cy="18" r="4.5" fill="{PANEL_NOW}" stroke="{BRIGHT_NOW}" '
+              f'stroke-width="1.6"/>',
+              f'<text x="{xb:.1f}" y="40" text-anchor="middle" class="k">Bought {_num(bought)}</text>']
+    if last == last and abs(last - bought) > 1e-9:
+        colour = GOOD if last >= bought else BAD
+        parts.append(f'<circle cx="{x(last):.1f}" cy="18" r="4.5" fill="{colour}"/>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def routine(steps):
+    """A short list of what to do and when, in the left panel."""
+    st.sidebar.markdown('<div class="routine">' + "".join(
+        f"<div><b>{escape(when)}</b>{escape(what)}</div>" for when, what in steps) + "</div>",
+        unsafe_allow_html=True)

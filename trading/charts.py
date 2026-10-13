@@ -227,3 +227,41 @@ def yearly_bars(by_year):
 def last_days(table, days):
     """The last `days` rows of a table, or all of it when days is None."""
     return table if days is None else table.tail(days)
+
+
+def add_levels(figure, levels):
+    """Horizontal price lines with a label: levels is a list of (value, label, colour)."""
+    for value, label, colour in levels:
+        if value is None or value != value:
+            continue
+        figure.add_hline(y=value, line={"color": colour, "width": 1.2, "dash": "dash"},
+                         annotation_text=f"{label} {value:,.2f}", annotation_position="top left",
+                         annotation_font={"color": colour, "size": 11})
+    return figure
+
+
+def sector_bars(table):
+    """Median one-month change of each industry. Blue for a rise, red for a fall."""
+    rows = table.sort_values("month_%")
+    figure = go.Figure(go.Bar(
+        x=rows["month_%"], y=rows.index, orientation="h",
+        marker={"color": [BLUE if v >= 0 else RED for v in rows["month_%"]]},
+        text=[f"{v:+.1f}%" for v in rows["month_%"]], textposition="outside",
+        hovertemplate="%{y}: %{x:+.1f}%<extra></extra>"))
+    figure = _style(figure, "Industries: median price change over the last month",
+                    height=max(260, 26 * len(rows) + 80), legend=False)
+    figure.update_layout(hovermode="closest")
+    return figure
+
+
+def share_chart(table, title, guides=()):
+    """Lines that are shares from 0 to 100, with optional dashed guide lines."""
+    colours = [BLUE, ORANGE, AQUA, YELLOW]
+    figure = go.Figure([_line(table.index, table[c], c, colours[n % 4], ".0f")
+                        for n, c in enumerate(table.columns)])
+    for value, label in guides:
+        figure.add_hline(y=value, line={"color": MUTED, "width": 1, "dash": "dot"},
+                         annotation_text=label, annotation_position="top left",
+                         annotation_font={"color": MUTED, "size": 11})
+    figure.update_yaxes(range=[0, 100], ticksuffix="%")
+    return _style(figure, title, height=300)

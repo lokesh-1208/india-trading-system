@@ -435,6 +435,11 @@ class Model:
         (see rotation.simulate).
         """
         rules = {**config.MODEL_STYLES[style or config.MODEL_STYLE], **entry}
+        if rules.get("caution_share") and rules.get("budget_scale") is None:
+            share = np.where(self.strong_market().to_numpy(), 1.0, rules["caution_share"])
+            rules["budget_scale"] = pd.DataFrame(
+                np.repeat(share[:, None], len(self.prepared["symbols"]), axis=1),
+                index=self.calendar, columns=self.prepared["symbols"])
         return rotation.simulate(
             self.trading, None, start, end, capital, scorer=self.score_on,
             check=rules["check"], positions_wanted=rules["positions"],
@@ -442,7 +447,8 @@ class Model:
             trend_exit=rules.get("trend_exit", False), buy_rank=rules.get("buy_rank"),
             max_gap=rules.get("max_gap"), limit_days=rules.get("limit_days"),
             max_drop=rules.get("max_drop"), min_room=rules.get("min_room"),
-            max_spike=rules.get("max_spike"))
+            max_spike=rules.get("max_spike"), midweek_fill=rules.get("midweek_fill", False),
+            budget_scale=rules.get("budget_scale"), exit_before=rules.get("exit_before"))
 
     def decision(self, held_symbols, style=None, buy_prices=None):
         """What the model says to do now, given the stocks you really hold.
@@ -461,6 +467,10 @@ class Model:
         plan["stopped"] = []
         plan["trend_broken"] = []
         plan["in_trend"] = self.trading["in_trend"].iloc[-1]
+        # The week's picks come from the check day's close and stay fixed all week.
+        decided = int(self.calendar.get_loc(plan["decided_on"]))
+        plan["signal_scores"] = self.score_on(decided)
+        plan["signal_in_trend"] = self.trading["in_trend"].iloc[decided]
         if rules.get("trend_exit") and plan["market_ok"]:
             in_trend = plan["in_trend"]
             plan["trend_broken"] = [s for s in plan["keep"] if not bool(in_trend.get(s, True))]
@@ -487,6 +497,18 @@ class Model:
         plan["market_score"] = float(self.market_score.iloc[-1])
         plan["market_level"], plan["market_note"] = self.market_level()
         return plan
+
+    def strong_market(self):
+        """True on days the market is strong: enough checks pass and Nifty is above its average."""
+        return ((self.market_score >= config.MODEL_STRONG_MARKET)
+                & self.prepared["market_ok"]).fillna(False)
+
+    def amount_share(self, style=None):
+        """The share of the normal amount a new buy gets today (1.0 in a strong market)."""
+        rules = config.MODEL_STYLES[style or config.MODEL_STYLE]
+        if bool(self.strong_market().iloc[-1]) or not rules.get("caution_share"):
+            return 1.0
+        return float(rules["caution_share"])
 
     def market_level(self):
         """How far to trust the market today: "strong", "caution" or "weak", with a sentence."""
@@ -536,3 +558,19 @@ def from_disk(stocks, nifty):
     return Model(stocks, nifty,
                  lambda symbol, dates: data.membership_mask(symbol, dates, membership),
                  tables, markets)
+
+
+def results_soon_table(results, calendar, symbols, days=None):
+    """True on the days within `days` calendar days before each company's results."""
+    days = config.RESULTS_BLOCK_DAYS if days is None else days
+    table = pd.DataFrame(False, index=calendar, columns=list(symbols))
+    if results is None or len(results) == 0:
+        return table
+    wanted = results[results["symbol"].isin(table.columns)]
+    values = table.to_numpy().copy()
+    where = {symbol: number for number, symbol in enumerate(table.columns)}
+    for symbol, date in zip(wanted["symbol"], wanted["date"]):
+        first = calendar.searchsorted(date - pd.Timedelta(days=days))
+        last = calendar.searchsorted(date)          # up to the day before the results
+        values[first:last, where[symbol]] = True
+    return pd.DataFrame(values, index=calendar, columns=table.columns)

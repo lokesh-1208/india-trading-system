@@ -68,3 +68,19 @@ def test_a_position_cannot_be_sold_twice():
 def test_empty_journal_has_zero_totals():
     result = journal.totals(pd.DataFrame(columns=journal.COLUMNS))
     assert result["open_count"] == 0 and result["invested"] == 0 and result["closed_profit"] == 0
+
+
+def test_closed_trades_show_profit_after_charges_and_the_tax_estimate():
+    table = journal.record_buy(pd.DataFrame(columns=journal.COLUMNS), "ABC", "2026-10-01", 100.0, 100)
+    table = journal.record_sell(table, 0, "2026-10-10", 110.0)
+    closed = journal.closed_trades(table).iloc[0]
+    assert closed["profit"] == 1000.0 and 0 < closed["charges"] < 50
+    totals = journal.totals(table)
+    assert totals["closed_net"] == closed["net_profit"]
+    assert round(totals["tax_estimate"], 2) == round(closed["net_profit"] * 0.20, 2)
+
+
+def test_a_position_bought_after_the_last_close_is_valued_at_its_cost():
+    table = journal.record_buy(pd.DataFrame(columns=journal.COLUMNS), "ABC", "2026-10-13", 100.0, 10)
+    positions = journal.open_positions(table, {"ABC": 90.0}, last_day="2026-10-12")
+    assert positions.iloc[0]["last_price"] == 100.0

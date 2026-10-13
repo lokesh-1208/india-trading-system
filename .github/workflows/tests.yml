@@ -26,3 +26,33 @@ jobs:
 
       - name: Run the checks
         run: python -m pytest -v
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install the libraries
+        run: npm ci
+
+      - name: Check the types and build the page
+        run: npm run build
+
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the browser tests
+        run: npx playwright test
+        env:
+          CI: "1"

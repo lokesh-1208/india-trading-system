@@ -1,7 +1,7 @@
 """One place that knows how to refresh all the data.
 
 Used by update_data.py (the terminal command) and by the buttons on the
-dashboard, so they always do exactly the same thing.
+app, so they always do exactly the same thing.
 
 What a normal daily update does, and roughly how long each part takes:
   - indices (Nifty, VIX, global markets) from Yahoo           a few seconds

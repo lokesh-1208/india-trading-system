@@ -1,6 +1,6 @@
 """Before the market opens: refresh global markets, overnight news and NSE's
 pre-open prices. The scheduled task runs this at 9:10 am on weekdays; the
-dashboard's "Refresh before-open data" button does the same thing.
+app's "Refresh before open" button does the same thing.
 
 Run:  python premarket_update.py
 """

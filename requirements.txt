@@ -1,6 +1,7 @@
 pandas
 yfinance
 pytest
-streamlit
-plotly
 pypdf
+fastapi
+uvicorn
+httpx

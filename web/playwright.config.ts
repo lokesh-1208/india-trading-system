@@ -19,8 +19,9 @@ export default defineConfig({
     { name: "phone", use: { ...devices["Pixel 7"] }, testMatch: /phone\.spec\.ts/ },
   ],
   webServer: {
-    command: "npx vite preview --port 4173 --strictPort",
+    command: "npx vite preview --host 127.0.0.1 --port 4173 --strictPort",
     url: "http://127.0.0.1:4173",
+    timeout: 120_000,
     reuseExistingServer: !process.env.CI,
   },
 });

@@ -589,8 +589,27 @@ def _keep_rank(rules):
     return rules["keep_rank"] if rules.get("rank_exit", True) else 10 ** 9
 
 
+def last_stock_day(stocks):
+    """The latest day that has stock closing prices, or None."""
+    days = [table.index.max() for table in stocks.values() if table is not None and len(table)]
+    return max(days) if days else None
+
+
+def up_to_last_close(nifty, stocks):
+    """Nifty cut at the last day with stock closes.
+
+    "Refresh before open" saves today's Nifty while the market is still open. The
+    model's calendar comes from Nifty, so without this cut it would score a day
+    that has no stock closes yet: every score empty, and the market checks read
+    from an unfinished day.
+    """
+    last = last_stock_day(stocks)
+    return nifty if last is None else nifty[nifty.index <= last]
+
+
 def from_disk(stocks, nifty):
     """Build the model from the files that the update downloaded."""
+    nifty = up_to_last_close(nifty, stocks)
     membership = data.load_membership()
     universe = data.load_universe()
     flow_table = flows.load_flows()

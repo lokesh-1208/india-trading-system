@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from trading import (breadth, company, data, journal, model, movers, news, newsview, picks,
+from trading import (breadth, company, data, flows, journal, model, movers, news, newsview, picks,
                      premarket, today, update)
 
 from server.store import STORE
@@ -68,8 +68,35 @@ def market_strip():
     return items
 
 
+def warm_up():
+    """Load the data and the slow pages once, so the first clicks are quick.
+
+    Run when the app starts and again after every update.
+    """
+    for build in (today_page, market_page, before_open, news_page, movers_page,
+                  lambda: stock_page("RELIANCE")):
+        try:
+            build()
+        except Exception:
+            pass                       # the page shows its own error when opened
+
+
+def missing_flow_days(flow_days, trading_days):
+    """Trading days since the first saved FII/DII day that have no figures.
+
+    NSE only gives the latest day, so a day the update did not run is lost.
+    """
+    flow_days = set(pd.to_datetime(list(flow_days)).normalize())
+    if not flow_days:
+        return []
+    first = min(flow_days)
+    return [day for day in pd.to_datetime(list(trading_days)).normalize()
+            if day >= first and day not in flow_days]
+
+
 def status():
-    nifty = STORE.nifty()
+    # The last day with stock closes: the morning refresh can add today's unfinished Nifty.
+    nifty = STORE.closed_nifty()
     now = india_now()
     last = nifty.index[-1]
     fresh, text = today.data_status(last, now)
@@ -80,7 +107,10 @@ def status():
                           .tz_convert("Asia/Kolkata").tz_localize(None))
         except OSError:
             pass
+    flow_table = flows.load_flows()
+    missed = missing_flow_days(flow_table["date"] if len(flow_table) else [], nifty.index)
     return clean({"prices_to": last, "fresh": fresh == "fresh", "text": text,
+                  "missed_flow_days": missed,
                   "updated": max(stamps) if stamps else None, "strip": market_strip(),
                   "now": now})
 
@@ -100,6 +130,38 @@ def _ladder(stop, signal, limit, last):
     low, high = stop * 0.98, limit * 1.02
     return {"stop": stop, "signal": signal, "limit": limit, "last": last,
             "low": low, "high": high}
+
+
+def next_list_day(list_day):
+    """The Monday a fresh weekly list is made for (from the Friday close before it)."""
+    day = pd.Timestamp(list_day).normalize() + pd.Timedelta(days=1)
+    while day.weekday() != 0:
+        day += pd.Timedelta(days=1)
+    return day
+
+
+def list_summary(status_table, places, market_ok):
+    """One plain sentence: why the Buy section shows as many stocks as it does."""
+    if len(status_table) == 0:
+        return "There is no list for this week yet."
+    counts = status_table["status"].value_counts()
+    can_buy = int(counts.get("Buy", 0))
+    parts = []
+    for status, words in [("You hold", "you already hold {}"),
+                          ("Missed", "{} ran more than 2% above their list price (the model does not chase)"),
+                          ("Trend broke", "{} closed below the 20-day average"),
+                          ("Results soon", "{} have results due within 5 days"),
+                          ("Too costly", "{} cost more per share than the money per stock")]:
+        if counts.get(status, 0):
+            parts.append(words.format(int(counts[status])))
+    text = f"This week's list has {len(status_table)} stocks"
+    text += (": " + "; ".join(parts) + ". ") if parts else ". "
+    if not market_ok:
+        return text + "The market is weak, so nothing is bought today."
+    if can_buy == 0:
+        return text + "None of them can be bought today."
+    room = f"room for {places} new stock{'s' if places != 1 else ''}"
+    return text + f"{can_buy} can be bought today, with {room}."
 
 
 def today_page(money=None):
@@ -140,6 +202,12 @@ def today_page(money=None):
             parts.append(f"promoter pledge {pledged:.0f}%")
         return " · ".join(parts)
 
+    def why(row):
+        return {"Too costly": f"one share costs more than ₹{per_stock:,.0f}",
+                "Missed": f"last {row.last:,.2f} is above the limit {row.limit:,.2f}",
+                "Trend broke": f"closed below its {config.EMA_FAST}-day average",
+                "Results soon": "results due within 5 days"}.get(row.status, "")
+
     buys, skips = [], []
     for row in status_table.itertuples():
         stop = row.close * (1 - rules["stop_loss"])
@@ -156,11 +224,10 @@ def today_page(money=None):
             item["tag"] = "Backup"
             buys.append(item)
         elif row.status != "You hold":
-            item["why"] = {"Too costly": f"one share costs more than ₹{per_stock:,.0f}",
-                           "Missed": f"last {row.last:,.2f} is above the limit {row.limit:,.2f}",
-                           "Trend broke": f"closed below its {config.EMA_FAST}-day average",
-                           "Results soon": "results due within 5 days"}.get(row.status, "")
+            item["why"] = why(row)
             skips.append(item)
+
+    explain = list_summary(status_table, places, bool(plan["market_ok"]))
 
     # ---- your stocks ----
     trend = STORE.trend_line()
@@ -173,6 +240,9 @@ def today_page(money=None):
             (row["last_price"] - row["buy_price"]) * row["quantity"]
         holds.append(row)
     sells = [row for row in holds if row["action"] == "SELL"]
+    weakest = set(today.avoid_list(plan)["symbol"])
+    for row in holds:
+        row["weakest"] = row["symbol"] in weakest      # among the model's weakest scores
 
     # ---- the headline ----
     to_buy = len([item for item in buys if item["tag"] == "Buy"]) if plan["market_ok"] else 0
@@ -195,15 +265,37 @@ def today_page(money=None):
 
     known = plan["checks"].dropna()
     week_rows, week_days = picks.tracker(log, list_day, built.prepared["last_close"],
-                                         STORE.nifty()["Close"])
+                                         STORE.closed_nifty()["Close"])
+    # One table for the whole weekly list: today's status, ranks each day, move since picked.
+    tags = {item["symbol"]: item["tag"] for item in buys}
+    tracked = {row["symbol"]: row for row in week_rows.to_dict("records")} if len(week_rows) else {}
+    week_list = []
+    for row in status_table.itertuples():
+        seen = tracked.get(row.symbol, {})
+        week_list.append({
+            "symbol": row.symbol, "rank": row.rank, "score": row.score,
+            "status": tags.get(row.symbol, row.status) if plan["market_ok"] or
+            row.status != "Buy" else "Market weak",
+            "why": why(row), "close": row.close, "limit": row.limit, "last": row.last,
+            "ranks": {str(pd.Timestamp(day).date()): rank
+                      for day, rank in seen.get("ranks", {}).items()},
+            "since_first_%": seen.get("since_first_%"), "nifty_%": seen.get("nifty_%")})
+
     return clean({
+        "week_list": week_list,
+        "week_days": [str(pd.Timestamp(day).date()) for day in week_days],
         "list_day": list_day, "signal_day": last_day, "week_of": weekly["list_day"].iloc[0]
         if len(weekly) else list_day,
-        "headline": headline, "nothing_to_sell": not sells,
+        # The close the weekly list (and its buy limits) was made from: the Friday before.
+        "list_from": weekly["signal_day"].iloc[0] if len(weekly) else None,
+        "next_list": next_list_day(list_day),
+        "headline": headline, "nothing_to_sell": not sells, "explain": explain,
         "market": {"level": plan["market_level"], "note": plan["market_note"],
                    "ok": bool(plan["market_ok"]), "share": share, "per_stock": per_stock,
                    "money": money, "positions": rules["positions"],
                    "checks_pass": int(known.sum()), "checks_total": int(len(known)),
+                   "checks_unknown": [name for name, value in plan["checks"].items()
+                                      if pd.isna(value)],
                    "stop_loss": rules["stop_loss"], "max_gap": above},
         "buys": buys if plan["market_ok"] else [],
         "holds": holds,
@@ -214,6 +306,33 @@ def today_page(money=None):
         "results_due": [{"symbol": symbol, "date": date} for symbol, date in sorted(due.items())
                         if symbol in set(ranking.index[:20])],
     })
+
+
+# ---------------------------------------------------------------- live ----
+def live_prices(symbols):
+    """Live prices for the Today page. The model's decisions do not use them."""
+    from trading import live
+    now = india_now()
+    return clean({"time": now, "market_open": live.market_open(now),
+                  "prices": live.prices(symbols)})
+
+
+def _session(now):
+    """'before' (until 9:15), 'open' (9:15 to 3:30) or 'after', on weekdays; 'closed' at weekends."""
+    if now.weekday() >= 5:
+        return "closed"
+    minutes = now.hour * 60 + now.minute
+    if minutes < 9 * 60 + 15:
+        return "before"
+    return "open" if minutes <= 15 * 60 + 30 else "after"
+
+
+def live_indices():
+    """Live values for the top bar (Nifty, India VIX, dollar-rupee, Brent)."""
+    from trading import live
+    found = live.indices()
+    return clean([{"name": name, "value": row["price"], "change": row["change_%"],
+                   "time": row["time"]} for name, row in found.items()])
 
 
 # ------------------------------------------------------------ before open --
@@ -262,6 +381,8 @@ def before_open():
         "moves": records(moves),
         "sectors": premarket.sector_summary(sectors),
         "preopen_ready": preopen is not None,
+        # After 9:15 these are this morning's guesses, not a picture of the market now.
+        "stage": _session(now),
         "up": [row for row in rows if row["direction"] > 0],
         "down": [row for row in rows if row["direction"] < 0],
         "note": "For context: it helps you understand the open. The buy and sell calls "
@@ -291,10 +412,14 @@ def movers_page():
     stocks = STORE.stocks()
     symbols = [symbol for symbol in data.load_universe()["Symbol"] if symbol in stocks]
     moves = movers.day_moves(stocks, symbols)
-    nifty = STORE.nifty()
     if len(moves) == 0:
         return {"day": None, "up": [], "down": [], "mood": None}
     day = moves["day"].max()
+    # Index moves for the same day as the stock moves, not today's unfinished day.
+    nifty = STORE.nifty()
+    nifty = nifty[nifty.index <= day]
+    vix = data.load_market("INDIAVIX")
+    vix = vix[vix.index <= day] if vix is not None else None
     moves = moves[moves["day"] == day]
     calendar = nifty.index[nifty.index < day]
     previous = calendar[-1] if len(calendar) else day - pd.Timedelta(days=1)
@@ -304,7 +429,7 @@ def movers_page():
                                   STORE.deals(), fundamentals.load_results_dates(),
                                   industry=industry)
              for side in ("up", "down")}
-    reading = movers.mood(moves, data.load_market("INDIAVIX"), nifty)
+    reading = movers.mood(moves, vix, nifty)
     for table in sides.values():
         table["industry"] = [industry.get(symbol, "") for symbol in table["symbol"]]
     return clean({"day": day, "mood": reading, "up": records(sides["up"]),
@@ -319,8 +444,9 @@ def market_page():
     plan_checks = built.checks.iloc[-1]
     level, note = built.market_level()
     markets = []
-    for name in ["NIFTY50", "INDIAVIX", "SP500", "NASDAQ", "FTSE100", "NIKKEI225", "HANGSENG",
-                 "SHANGHAI", "USDINR", "BRENT", "GOLD", "SP500_FUTURES"]:
+    # Nifty, India VIX, dollar-rupee and Brent are live in the top bar, so not repeated here.
+    for name in ["SP500", "NASDAQ", "FTSE100", "NIKKEI225", "HANGSENG", "SHANGHAI", "GOLD",
+                 "SP500_FUTURES"]:
         value, change = _day_change(data.load_market(name))
         if value is not None:
             markets.append({"name": premarket.OVERNIGHT.get(name, "Nifty 50"),
@@ -355,6 +481,9 @@ def market_page():
                    for name, passed in plan_checks.items()],
         "markets": markets, "fii_dii": fii, "breadth": width,
         "sectors": records(sectors),
+        # The weakest scores: not to buy, and to leave if you hold one (moved here from Today).
+        "avoid": records(today.avoid_list({"weakest": built.score_on(len(built.calendar) - 1)
+                                           .tail(config.MODEL_WEAKEST).iloc[::-1]})),
         "history": {"summary": summary,
                     "by_year": [{"year": int(year), "model": row["strategy"],
                                  "nifty": row["nifty"]} for year, row in by_year.iterrows()],
@@ -522,7 +651,7 @@ def documents(symbol):
 def trades_page():
     trades = journal.load()
     prices = STORE.model().prepared["last_close"].iloc[-1]
-    last_day = STORE.nifty().index[-1]
+    last_day = STORE.closed_nifty().index[-1]
     totals = journal.totals(trades, prices, last_day)
     positions = journal.open_positions(trades, prices, last_day)
     positions = positions.assign(row=positions.index)

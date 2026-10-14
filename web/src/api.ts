@@ -39,22 +39,29 @@ export function useApi<T>(path: string | null, version = 0) {
 }
 
 // ---- shapes of the answers ----
+export type LivePrice = { price: number; previous_close: number | null; "change_%": number | null; time: string | null };
+export type Live = { time: string; market_open: boolean; prices: Record<string, LivePrice> };
 export type Ladder = { stop: number; signal: number; limit: number; last: number; low: number; high: number };
 export type BuyItem = {
   symbol: string; rank: number; score: number; about: string; ladder: Ladder; shares: number;
   amount: number; kind: string; status: string; tag?: string; why?: string;
 };
+export type WeekRow = {
+  symbol: string; rank: number; score: number; status: string; why: string; close: number; limit: number;
+  last: number; ranks: Record<string, number>; "since_first_%": number | null; "nifty_%": number | null;
+};
 export type Holding = {
-  symbol: string; action: "HOLD" | "SELL" | "WAIT"; reason: string; quantity: number; buy_price: number;
+  symbol: string; action: "HOLD" | "SELL" | "WAIT"; reason: string; quantity: number; buy_price: number; weakest?: boolean;
   last_price: number; "gain_%": number | null; gain_rs: number | null; stop_loss: number;
   trend_line: number | null; bought: string; days_held: number; exit_line: number; exit_pct: number;
   exit_rs: number; gtt: number;
 };
 export type Today = {
   list_day: string; signal_day: string; week_of: string; headline: string; nothing_to_sell: boolean;
+  explain: string; list_from: string | null; next_list: string; week_list: WeekRow[]; week_days: string[];
   market: {
     level: string; note: string; ok: boolean; share: number; per_stock: number; money: number;
-    positions: number; checks_pass: number; checks_total: number; stop_loss: number; max_gap: number;
+    positions: number; checks_pass: number; checks_total: number; checks_unknown: string[]; stop_loss: number; max_gap: number;
   };
   buys: BuyItem[]; holds: Holding[]; skips: BuyItem[];
   watch: { symbol: string; rank: number; score: number; close: number }[];
@@ -73,6 +80,7 @@ export type Job = {
 };
 export type Status = {
   prices_to: string; fresh: boolean; text: string; updated: string | null; strip: Strip[]; now: string; job: Job;
+  missed_flow_days?: string[];
 };
 export type Likely = {
   symbol: string; direction: number; strength: number; reasons: string[]; open_pct: number | null;
@@ -81,7 +89,7 @@ export type Likely = {
 export type BeforeOpen = {
   since: string; guess: string; reasons: string[]; sectors: string[]; preopen_ready: boolean;
   moves: { name: string; market: string; "change_%": number; day: string }[];
-  up: Likely[]; down: Likely[]; note: string;
+  up: Likely[]; down: Likely[]; note: string; stage?: "before" | "open" | "after" | "closed";
 };
 export type Idea = {
   symbol: string; time: string; label: string; lean: number; what: string; link: string;
@@ -103,6 +111,7 @@ export type Movers = {
 export type Market = {
   level: string; note: string; checks: { name: string; passed: boolean | null }[];
   markets: { name: string; value: number; change: number }[];
+  avoid: { symbol: string; score: number; price: number }[];
   fii_dii: { date: string; FII: number | null; DII: number | null }[];
   breadth: null | {
     day: string; above_20: number; above_20_week_ago: number; above_200: number; above_200_week_ago: number;

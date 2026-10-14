@@ -65,6 +65,9 @@ class Jobs:
         STORE.clear()
         with self._lock:
             self.state.update(running=False, finished=time.time(), message=message, error=error)
+        # Build the slow pages again now, so the first click after an update is quick.
+        from server import views
+        threading.Thread(target=views.warm_up, daemon=True).start()
 
 
 def _describe(summary):

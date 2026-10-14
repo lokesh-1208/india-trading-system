@@ -224,3 +224,14 @@ def test_nse_figures_give_roce_cash_conversion_and_the_filing_day():
     # known filing: usable from the next day; unknown: the 75-day lag
     assert factors.loc["2025-03-31", "available"] == pd.Timestamp("2025-04-22")
     assert latest["available"] == pd.Timestamp("2026-03-31") + pd.Timedelta(days=75)
+
+
+def test_nifty_is_cut_at_the_last_day_with_stock_closes():
+    # 14 Oct 2026: the morning refresh saved that day's Nifty before any stock closed.
+    days = pd.to_datetime(["2026-10-12", "2026-10-13", "2026-10-14"])
+    nifty = pd.DataFrame({"Close": [1.0, 2.0, 3.0]}, index=days)
+    stocks = {"AAA": pd.DataFrame({"Close": [10.0, 11.0]}, index=days[:2]),
+              "BBB": pd.DataFrame({"Close": [5.0]}, index=days[:1])}
+    cut = model.up_to_last_close(nifty, stocks)
+    assert list(cut.index) == list(days[:2])
+    assert model.up_to_last_close(nifty, {}) is nifty

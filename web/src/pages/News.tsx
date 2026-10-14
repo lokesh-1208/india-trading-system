@@ -63,12 +63,39 @@ function MoverTable({ rows }: { rows: Mover[] }) {
   );
 }
 
+export function MoversPage() {
+  const { version } = useApp();
+  const movers = useApi<Movers>("/api/movers", version);
+  const [moverSide, setMoverSide] = useState<"up" | "down">("up");
+  return (
+    <section className="section" aria-labelledby="movers-title">
+      <div className="section-head">
+        <h1 id="movers-title">Mood and movers{movers.data?.day ? ` at the ${day(movers.data.day)} close` : ""} <Tag tone="plain">for context</Tag></h1>
+        {movers.data ? (
+          <div className="seg" role="group" aria-label="Which side">
+            <button aria-pressed={moverSide === "up"} onClick={() => setMoverSide("up")}>Heavy buying ({movers.data.up.length})</button>
+            <button aria-pressed={moverSide === "down"} onClick={() => setMoverSide("down")}>Heavy selling ({movers.data.down.length})</button>
+          </div>
+        ) : null}
+      </div>
+      {movers.error ? <Problem error={movers.error} retry={movers.reload} /> : !movers.data ? <Loading height={200} /> : (
+        <>
+          {movers.data.mood ? (
+            <p><strong>Mood: {movers.data.mood.label}.</strong> <span className="muted">{movers.data.mood.text}</span></p>
+          ) : null}
+          <p className="small muted">Nifty 500 stocks that moved at least {movers.data.rule.move}% on at least {movers.data.rule.volume}×
+            their normal volume. Big moves often reverse in the following days.</p>
+          <MoverTable rows={moverSide === "up" ? movers.data.up : movers.data.down} />
+        </>
+      )}
+    </section>
+  );
+}
+
 export default function NewsPage() {
   const { version } = useApp();
   const ideas = useApi<NewsIdeas>("/api/news", version);
-  const movers = useApi<Movers>("/api/movers", version);
   const [ideaSide, setIdeaSide] = useState<"buys" | "exits">("exits");
-  const [moverSide, setMoverSide] = useState<"up" | "down">("up");
 
   return (
     <>
@@ -86,28 +113,6 @@ export default function NewsPage() {
           <>
             <p className="small muted">{ideas.data.note}</p>
             <IdeaTable rows={ideaSide === "buys" ? ideas.data.buys : ideas.data.exits} />
-          </>
-        )}
-      </section>
-
-      <section className="section" aria-labelledby="movers-title">
-        <div className="section-head">
-          <h2 id="movers-title">Market movers{movers.data?.day ? `, ${day(movers.data.day)}` : ""} <Tag tone="plain">for context</Tag></h2>
-          {movers.data ? (
-            <div className="seg" role="group" aria-label="Which side">
-              <button aria-pressed={moverSide === "up"} onClick={() => setMoverSide("up")}>Heavy buying ({movers.data.up.length})</button>
-              <button aria-pressed={moverSide === "down"} onClick={() => setMoverSide("down")}>Heavy selling ({movers.data.down.length})</button>
-            </div>
-          ) : null}
-        </div>
-        {movers.error ? <Problem error={movers.error} retry={movers.reload} /> : !movers.data ? <Loading height={200} /> : (
-          <>
-            {movers.data.mood ? (
-              <p><strong>Mood: {movers.data.mood.label}.</strong> <span className="muted">{movers.data.mood.text}</span></p>
-            ) : null}
-            <p className="small muted">Nifty 500 stocks that moved at least {movers.data.rule.move}% on at least {movers.data.rule.volume}×
-              their normal volume. Big moves often reverse in the following days.</p>
-            <MoverTable rows={moverSide === "up" ? movers.data.up : movers.data.down} />
           </>
         )}
       </section>

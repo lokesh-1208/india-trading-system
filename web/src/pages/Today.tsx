@@ -1,39 +1,69 @@
-// Today: what to buy, what to hold or sell, and what to skip. The one page to act from.
-import { useState } from "react";
+// Today: what to buy and what to hold or sell. The one page to act from.
+// Context (before the open, news, movers, market health) lives on the Market page.
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { BeforeOpen, Holding, Movers, NewsIdeas, Today, useApi } from "../api";
+import { BeforeOpen, Holding, LivePrice, Movers, Today, WeekRow, useApi } from "../api";
 import { useApp } from "../App";
 import { Empty, Ladder, Loading, Panel, Problem, Section, Tag } from "../components/ui";
+import { clock, LiveNote, useLive } from "../components/live";
 import { day, dateTime, pct, price, rupees, signedRupees } from "../format";
 
 function savedMoney() {
   try { return Number(localStorage.getItem("kasauti-money")) || 100000; } catch { return 100000; }
 }
 
-function HoldCard({ row }: { row: Holding }) {
+// Before 9:15 am on a weekday (this computer's clock, India time).
+function beforeOpen(now = new Date()) {
+  const weekday = now.getDay() !== 0 && now.getDay() !== 6;
+  return weekday && now.getHours() * 60 + now.getMinutes() < 9 * 60 + 15;
+}
+
+// Trading days from the buy day to today, counting both (weekends skipped, holidays not known).
+function holdingDay(bought: string, today = new Date()) {
+  const date = new Date(`${bought.slice(0, 10)}T00:00:00`);
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let count = 0;
+  while (date <= end) {
+    if (date.getDay() !== 0 && date.getDay() !== 6) count += 1;
+    date.setDate(date.getDate() + 1);
+  }
+  return Math.max(count, 1);
+}
+
+function HoldCard({ row, quote }: { row: Holding; quote?: LivePrice }) {
+  const now = quote?.price ?? row.last_price;
+  const gainPct = quote ? (quote.price / row.buy_price - 1) * 100 : row["gain_%"];
+  const gainRs = quote ? (quote.price - row.buy_price) * row.quantity : row.gain_rs;
   const tone = row.action === "SELL" ? "down" : row.action === "WAIT" ? "plain" : "up";
   const label = row.action === "SELL" ? "Sell" : row.action === "WAIT" ? "Bought today" : "Hold";
+  const nearLine = quote && row.action === "HOLD" && quote.price < row.exit_line;
   return (
     <Link to={`/stocks/${row.symbol}`} className="card" aria-label={`${row.symbol}: ${label}`}>
       <div className="who">
-        <div className="line1"><span className="symbol">{row.symbol}</span><Tag tone={tone}>{label}</Tag></div>
+        <div className="line1">
+          <span className="symbol">{row.symbol}</span><Tag tone={tone}>{label}</Tag>
+          {row.weakest ? <Tag tone="down">Among the weakest scores</Tag> : null}
+        </div>
         <span className="small muted">{row.quantity} shares at ₹{price(row.buy_price)} · bought {day(row.bought)}</span>
         {row.action === "SELL" ? <span className="small down">{row.reason}: sell at tomorrow's open</span> : null}
+        {nearLine ? <span className="small down">Live price is below the sell line. The rule decides at the close: sell tomorrow only if it closes below ₹{price(row.exit_line)}.</span> : null}
       </div>
       <div className="mid facts">
         <span className="muted">Sell if it closes below</span><span className="num">₹{price(row.exit_line)}</span>
         <span className="muted">GTT stop-loss in Kite</span><span className="num">₹{price(row.gtt)}</span>
-        <span className="muted">{row.exit_pct > 0 ? "Profit locked in" : "If it exits now"}</span>
+        <span className="muted">{row.exit_pct > 0 ? "Profit locked in" : "If it exits there"}</span>
         <span className={`num ${row.exit_pct > 0 ? "up" : "down"}`}>{pct(row.exit_pct)} ({signedRupees(row.exit_rs)})</span>
       </div>
       <div className="end">
-        <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>₹{price(row.last_price)}</span>
-        {row.action === "WAIT" ? <span className="small muted">checked after today's close</span> : (
-          <span className={`num ${(row["gain_%"] ?? 0) >= 0 ? "up" : "down"}`} style={{ fontSize: 13 }}>
-            {pct(row["gain_%"])}  {signedRupees(row.gain_rs)}
+        <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>
+          {quote ? <span className="small muted" style={{ fontWeight: 400 }}>live </span> : null}₹{price(now)}
+        </span>
+        {row.action === "WAIT" && !quote ? <span className="small muted">checked after today's close</span> : (
+          <span className={`num ${(gainPct ?? 0) >= 0 ? "up" : "down"}`} style={{ fontSize: 13 }}>
+            {pct(gainPct)}  {signedRupees(gainRs)}
           </span>
         )}
-        <span className="small muted">day {row.days_held} of holding</span>
+        <span className="small muted">day {holdingDay(row.bought)} of holding</span>
       </div>
     </Link>
   );
@@ -46,46 +76,17 @@ function BeforeOpenCard({ version }: { version: number }) {
       {error ? <span className="small muted">{error}</span> : !data ? <Loading height={90} /> : (
         <>
           <div style={{ fontSize: 18, fontWeight: 600 }}>{data.guess}</div>
-          {data.moves.slice(0, 5).map((move) => (
+          {data.moves.slice(0, 4).map((move) => (
             <div key={move.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
               <span className="muted">{move.market}</span>
               <span className="num">{pct(move["change_%"], 2)}</span>
             </div>
           ))}
-          {data.sectors.slice(0, 2).map((line) => <p key={line} className="small muted">{line}</p>)}
           <p className="small muted">
             {data.preopen_ready ? `${data.up.length} likely up, ${data.down.length} likely down at the open.`
               : "Pre-open prices appear after 9:08 am."}{" "}
             <Link to="/before-open">See all</Link>
           </p>
-        </>
-      )}
-    </Panel>
-  );
-}
-
-function NewsCard({ version }: { version: number }) {
-  const { data, error } = useApi<NewsIdeas>("/api/news", version);
-  const items = data ? [...data.exits.slice(0, 2), ...data.buys.slice(0, 2)] : [];
-  return (
-    <Panel title="News ideas" aside="for context">
-      {error ? <span className="small muted">{error}</span> : !data ? <Loading height={90} /> : items.length === 0 ? (
-        <span className="small muted">No news ideas in the last few days.</span>
-      ) : (
-        <>
-          {items.map((idea) => (
-            <div key={idea.symbol + idea.time} style={{ display: "flex", flexDirection: "column", gap: 2, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                <Link to={`/stocks/${idea.symbol}`} style={{ fontWeight: 600, color: "var(--text)" }}>{idea.symbol}</Link>
-                <span className={`small ${idea.lean > 0 ? "up" : "down"}`} style={{ fontWeight: 600 }}>
-                  {idea.lean > 0 ? "Good news" : "Bad news"}
-                </span>
-              </div>
-              <span style={{ fontSize: 13 }}>{idea.label}</span>
-              <span className="small muted">{idea.history}</span>
-            </div>
-          ))}
-          <Link to="/news" className="small">All news ideas</Link>
         </>
       )}
     </Panel>
@@ -98,7 +99,7 @@ function MoodCard({ version }: { version: number }) {
   const mood = data.mood;
   const total = mood.rushing_in + mood.rushing_out || 1;
   return (
-    <Panel title="Market mood" aside={day(data.day)}>
+    <Panel title="Market mood" aside={`at the ${day(data.day)} close`}>
       <div style={{ fontSize: 18, fontWeight: 600 }}>{mood.label}</div>
       <div className="meter" aria-hidden="true">
         <div style={{ width: `${(mood.rushing_in / total) * 100}%`, background: "var(--up)" }} />
@@ -107,15 +108,69 @@ function MoodCard({ version }: { version: number }) {
       <div className="num small muted" style={{ display: "flex", justifyContent: "space-between" }}>
         <span>{mood.rushing_in} heavy buying</span><span>{mood.rushing_out} heavy selling</span>
       </div>
-      <p className="small muted">{mood.text} <Link to="/news">See the movers</Link></p>
+      <p className="small muted">{mood.text} <Link to="/movers">See the movers</Link></p>
     </Panel>
   );
+}
+
+const STATUS_TONE: Record<string, string> = {
+  Buy: "blue", Backup: "plain", "You hold": "up", Missed: "plain", "Trend broke": "down",
+  "Results soon": "warn", "Too costly": "plain", "Market weak": "warn",
+};
+
+function WeekTable({ rows, days, quote }: { rows: WeekRow[]; days: string[]; quote: (s: string) => LivePrice | undefined }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Stock</th><th>Today</th><th>Why</th><th className="right">Live</th>
+            {days.map((list) => <th key={list} className="right">{day(list)}</th>)}
+            <th className="right">Since picked</th><th className="right">Nifty</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const now = quote(row.symbol);
+            const backInRange = row.status === "Missed" && now && now.price <= row.limit;
+            const aboveNow = (row.status === "Buy" || row.status === "Backup") && now && now.price > row.limit;
+            return (
+              <tr key={row.symbol}>
+                <td><Link to={`/stocks/${row.symbol}`} style={{ color: "var(--text)", fontWeight: 600 }}>{row.symbol}</Link></td>
+                <td><Tag tone={STATUS_TONE[row.status] ?? "plain"}>{row.status}</Tag></td>
+                <td className="small muted num">{row.why}</td>
+                <td className="right" style={{ whiteSpace: "nowrap" }}>
+                  <LiveNote quote={now} />
+                  {backInRange ? <div className="small up" style={{ fontWeight: 600 }}>back in range</div> : null}
+                  {aboveNow ? <div className="small warn-text" style={{ fontWeight: 600 }}>above limit now</div> : null}
+                </td>
+                {days.map((list) => <td key={list} className="right num">{row.ranks[list] ?? <span className="muted">–</span>}</td>)}
+                <td className={`right num ${(row["since_first_%"] ?? 0) >= 0 ? "up" : "down"}`}>{pct(row["since_first_%"])}</td>
+                <td className="right num muted">{pct(row["nifty_%"])}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function countBy(rows: WeekRow[]) {
+  const counts = new Map<string, number>();
+  rows.forEach((row) => counts.set(row.status, (counts.get(row.status) ?? 0) + 1));
+  return Array.from(counts.entries()).map(([status, count]) => `${count} ${status.toLowerCase()}`).join(" · ");
 }
 
 export default function TodayPage() {
   const { version, status, startJob, job } = useApp();
   const [money, setMoney] = useState(savedMoney);
   const { data, error, reload } = useApi<Today>(`/api/today?money=${money}`, version);
+  const symbols = useMemo(() => data
+    ? Array.from(new Set([...data.week_list.map((row) => row.symbol), ...data.holds.map((row) => row.symbol)])).sort()
+    : [], [data]);
+  const { live, failed: liveFailed } = useLive(symbols);
+  const quote = (symbol: string) => live?.prices[symbol];
 
   const changeMoney = (value: number) => {
     setMoney(value);
@@ -126,11 +181,12 @@ export default function TodayPage() {
   if (!data) return <Loading count={4} height={110} />;
   const market = data.market;
   const caution = market.level !== "strong";
+  const morning = beforeOpen();
 
   return (
     <>
-      <section className="hero" aria-label="Today's plan">
-        <div className="panel plan">
+      <section className="panel hero-one" aria-label="Today's plan">
+        <div className="left">
           <span className="eyebrow">For {day(data.list_day)} · from the {day(data.signal_day)} close</span>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "6px 20px" }}>
             <h1>{data.headline}</h1>
@@ -140,22 +196,28 @@ export default function TodayPage() {
             <Tag tone={!market.ok ? "down" : caution ? "warn" : "up"}>
               Market: {!market.ok ? "weak" : caution ? "caution" : "strong"}
             </Tag>
-            <span className="small muted">
-              {market.checks_pass} of {market.checks_total} market checks pass.{" "}
+            <span className="small muted" data-testid="market-checks">
+              {market.checks_pass} of {market.checks_total} market checks pass
+              {market.checks_unknown.length ? ` (${market.checks_unknown.length} more not known yet)` : ""}.{" "}
               {market.share < 1
                 ? `Each buy uses ${Math.round(market.share * 100)}%: about ${rupees(market.per_stock)} instead of ${rupees(market.money / market.positions)}.`
                 : `Each buy uses about ${rupees(market.per_stock)}.`}
             </span>
           </div>
           {caution ? <p className="small muted">{market.note}</p> : null}
+          <p className="small muted" data-testid="next-list">
+            This week's list was made from the {day(data.list_from)} close. Next list: {day(data.next_list)}, from the Friday close.
+          </p>
         </div>
-        <div className="panel data">
-          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span className="small muted">Data</span>
-            <span>{status?.text ?? "…"}</span>
-            {status?.updated ? <span className="small muted">Updated {dateTime(status.updated)} · daily update 6:30 pm, before-open 9:10 am</span> : null}
-          </div>
-          <label>Money for trading (₹)
+        <div className="right">
+          <span className="small">{status?.text ?? "…"}</span>
+          {status?.missed_flow_days?.length ? (
+            <span className="small warn-text" data-testid="missed-days">
+              Daily update missed on {status.missed_flow_days.map((missed) => day(missed)).join(", ")}: that day's
+              foreign/Indian institution figures are lost (NSE keeps only the latest day).
+            </span>
+          ) : null}
+          <label className="small">Money for trading (₹)
             <input type="number" min={10000} step={5000} value={money}
               onChange={(event) => changeMoney(Number(event.target.value) || 100000)} />
           </label>
@@ -165,32 +227,49 @@ export default function TodayPage() {
             <button style={{ flex: "1 1 120px" }} disabled={!!job?.running}
               onClick={() => startJob("premarket")}>Refresh before open</button>
           </div>
+          {status?.updated ? <span className="small muted">Updated {dateTime(status.updated)} · daily 6:30 pm, before-open 9:10 am</span> : null}
         </div>
       </section>
 
       <div className="row">
         <div className="main-col">
           <Section title="Buy from this week's list" id="buy"
-            aside={`List made from the ${day(data.week_of)} close. Place an AMO limit order at the limit.`}>
+            aside={`Limits from the ${day(data.list_from)} close. Place an AMO limit order at the limit.`}>
+            {data.explain ? <p className="small muted" data-testid="list-explain" style={{ marginTop: 0 }}>{data.explain}</p> : null}
+            <p className="small muted" data-testid="live-status" style={{ marginTop: 0 }}>
+              {liveFailed && !live ? "Live prices could not be fetched; showing the last close."
+                : !live ? "Getting live prices…"
+                  : live.market_open ? `Live prices, updated every minute (last at ${clock(live.time)}). The model still decides from the close.`
+                    : "Market is closed: prices shown are the last traded ones."}
+            </p>
             {!market.ok ? <Empty>The market is weak, so the model buys nothing today.</Empty>
               : data.buys.length === 0 ? <Empty>Nothing on this week's list is buyable today.</Empty>
-                : data.buys.map((item) => (
-                  <Link key={item.symbol} to={`/stocks/${item.symbol}`} className="card"
-                    aria-label={`${item.symbol}: ${item.tag}`}>
-                    <div className="who">
-                      <div className="line1">
-                        <span className="symbol">{item.symbol}</span>
-                        <Tag tone={item.tag === "Buy" ? "blue" : "plain"}>{item.tag}</Tag>
+                : data.buys.map((item) => {
+                  const now = quote(item.symbol);
+                  const above = now !== undefined && now.price > item.ladder.limit;
+                  return (
+                    <Link key={item.symbol} to={`/stocks/${item.symbol}`} className="card"
+                      aria-label={`${item.symbol}: ${item.tag}`}>
+                      <div className="who">
+                        <div className="line1">
+                          <span className="symbol">{item.symbol}</span>
+                          <Tag tone={item.tag === "Buy" ? "blue" : "plain"}>{item.tag}</Tag>
+                          {now ? <Tag tone={above ? "warn" : "up"}>{above ? "Above limit now" : "In range now"}</Tag> : null}
+                        </div>
+                        <span className="small muted">{item.about}</span>
+                        {above ? <span className="small down">Live price is above the limit ₹{price(item.ladder.limit)}: do not chase. A limit order fills only if it comes back.</span> : null}
                       </div>
-                      <span className="small muted">{item.about}</span>
-                    </div>
-                    <div className="mid"><Ladder ladder={item.ladder} /></div>
-                    <div className="end">
-                      <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>{item.shares} shares</span>
-                      <span className="small muted">about {rupees(item.amount)}</span>
-                    </div>
-                  </Link>
-                ))}
+                      <div className="mid">
+                        <Ladder ladder={now ? { ...item.ladder, last: now.price } : item.ladder} lastLabel={now ? "live" : "last"} />
+                      </div>
+                      <div className="end">
+                        <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>{item.shares} shares</span>
+                        <span className="small muted">about {rupees(item.amount)}</span>
+                        <LiveNote quote={now} />
+                      </div>
+                    </Link>
+                  );
+                })}
             {data.results_due.length ? (
               <p className="small muted">Left out because results are due within 5 days:{" "}
                 {data.results_due.map((item) => `${item.symbol} (${day(item.date)})`).join(", ")}.</p>
@@ -200,94 +279,42 @@ export default function TodayPage() {
           <Section title="Your stocks" id="mine"
             aside={data.holds.length ? `Stop-loss ${Math.round(market.stop_loss * 100)}% under your buy price` : undefined}>
             {data.holds.length === 0 ? (
-              <Empty>After you buy, record it under <Link to="/trades">Trades</Link> and it shows here, marked Hold or Sell each day.</Empty>
-            ) : data.holds.map((row) => <HoldCard key={row.symbol} row={row} />)}
+              <Empty>After you buy, record it under <Link to="/trades">Stocks &amp; trades</Link> and it shows here, marked Hold or Sell each day.</Empty>
+            ) : data.holds.map((row) => <HoldCard key={row.symbol} row={row} quote={quote(row.symbol)} />)}
           </Section>
 
-          {data.skips.length ? (
-            <Section title={<>Not buyable now <span className="muted" style={{ fontWeight: 400 }}>· rest of this week's list</span></>} id="skip">
-              <div className="panel tight table-wrap">
-                <table>
-                  <thead><tr><th>Stock</th><th>Status</th><th>Why</th></tr></thead>
-                  <tbody>
-                    {data.skips.map((item) => (
-                      <tr key={item.symbol}>
-                        <td><Link to={`/stocks/${item.symbol}`} style={{ color: "var(--text)", fontWeight: 600 }}>{item.symbol}</Link></td>
-                        <td><span className={`small ${item.status === "Missed" ? "muted" : "down"}`} style={{ fontWeight: 600 }}>{item.status}</span></td>
-                        <td className="small muted num">{item.why}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Section>
+          {data.week_list.length ? (
+            <details className="panel tight week" id="week">
+              <summary>
+                <strong>This week's list</strong>{" "}
+                <span className="small muted">· {data.week_list.length} stocks · {countBy(data.week_list)} · ranks each day and move since picked</span>
+              </summary>
+              <WeekTable rows={data.week_list} days={data.week_days} quote={quote} />
+              {data.watch.length ? (
+                <p className="small muted" style={{ padding: "0 14px 12px" }}>
+                  New on today's list, not this week's (watch only: buying new picks every day did worse in the tests):{" "}
+                  {data.watch.map((item, index) => (
+                    <span key={item.symbol}>{index ? ", " : ""}<Link to={`/stocks/${item.symbol}`}>{item.symbol}</Link></span>
+                  ))}.
+                </p>
+              ) : null}
+            </details>
           ) : null}
-
-          {data.tracker.rows.length ? (
-            <Section title="This week's tracker" id="tracker"
-              aside="Rank on each day's list; change since first picked, against Nifty">
-              <div className="panel tight table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Stock</th>
-                      {data.tracker.days.map((list) => <th key={list} className="right">{day(list)}</th>)}
-                      <th className="right">Since picked</th><th className="right">Nifty</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.tracker.rows.map((row) => (
-                      <tr key={row.symbol}>
-                        <td><Link to={`/stocks/${row.symbol}`} style={{ color: "var(--text)", fontWeight: 600 }}>{row.symbol}</Link>
-                          {row.last_week ? <span className="small muted"> · from last week</span> : null}</td>
-                        {data.tracker.days.map((list) => {
-                          const rank = Object.entries(row.ranks).find(([key]) => key.slice(0, 10) === list.slice(0, 10))?.[1];
-                          return <td key={list} className="right num">{rank ?? <span className="muted">–</span>}</td>;
-                        })}
-                        <td className={`right num ${(row["since_first_%"] ?? 0) >= 0 ? "up" : "down"}`}>{pct(row["since_first_%"])}</td>
-                        <td className="right num muted">{pct(row["nifty_%"])}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Section>
-          ) : null}
-
-          {data.watch.length ? (
-            <Section title="Watch: on today's list, not this week's" id="watch"
-              aside="Buying new picks every day did worse in the tests than buying weekly">
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {data.watch.map((item) => (
-                  <Link key={item.symbol} to={`/stocks/${item.symbol}`} className="pill"
-                    style={{ background: "var(--chip)", color: "var(--text)" }}>
-                    {item.symbol} <span className="muted small">rank {item.rank}</span>
-                  </Link>
-                ))}
-              </div>
-            </Section>
-          ) : null}
-
-          <Section title="Avoid: weakest scores" id="avoid" aside="If you hold one, the model would rather you were out">
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {data.avoid.map((item) => (
-                <Link key={item.symbol} to={`/stocks/${item.symbol}`} className="pill"
-                  style={{ background: "var(--down-bg)", color: "var(--text)" }}>
-                  {item.symbol} <span className="muted small">score {Math.round(item.score)}</span>
-                </Link>
-              ))}
-            </div>
-          </Section>
         </div>
 
         <aside className="side-col" aria-label="Context">
-          <BeforeOpenCard version={version} />
-          <NewsCard version={version} />
+          {morning ? <BeforeOpenCard version={version} /> : null}
           <MoodCard version={version} />
+          <Panel title="More context">
+            <p className="small muted" style={{ margin: 0 }}>
+              Before the open, news ideas, movers, market health and the weakest scores are on the{" "}
+              <Link to="/market">Market</Link> page.
+            </p>
+          </Panel>
         </aside>
       </div>
       <p className="small muted">
-        Buy, hold and sell follow the tested model. Before the open, news ideas and market mood are for context.
+        Buy, hold and sell follow the tested model. Market mood and everything on the Market page are for context.
       </p>
     </>
   );

@@ -176,6 +176,15 @@ def refresh_company_data(report=None, everything=False, include_shareholding=Non
 
 
 # -------------------------------------------------------------- everything --
+def _save_filing_pdfs():
+    """Open the PDFs of recent unclear or serious filings, so the news pages can read them."""
+    from trading import newsview
+    try:
+        newsview.fetch_pdfs(news.load())
+    except Exception:
+        pass                        # the titles alone are still read
+
+
 def run_update(include_company_data=None, report=None, full_prices=None):
     """Download prices, announcements, money flows and the company data that is due.
 
@@ -204,6 +213,7 @@ def run_update(include_company_data=None, report=None, full_prices=None):
         summary["news_added"] = news.update(list(data.load_universe()["Symbol"]))
         # Once: a year of older announcements, so the news reading has history.
         news.backfill(data.all_symbols(), report=report)
+        _save_filing_pdfs()
     except Exception as error:
         summary["news_problem"] = str(error)
     try:
@@ -270,6 +280,7 @@ def run_premarket(report=None, now=None):
     report("Overnight announcements", 0, 1)
     try:
         summary["news_added"] = news.update(list(data.load_universe()["Symbol"]))
+        _save_filing_pdfs()
     except Exception as error:
         summary["news_problem"] = str(error)
     report("Overnight announcements", 1, 1)

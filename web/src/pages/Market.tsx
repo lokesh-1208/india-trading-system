@@ -1,4 +1,5 @@
 // Market: the model's market checks, world markets, institutional money, and the model's past.
+import { Link } from "react-router-dom";
 import { Market, useApi } from "../api";
 import { useApp } from "../App";
 import { Check, Loading, Panel, Problem, Tag } from "../components/ui";
@@ -29,6 +30,7 @@ export default function MarketPage() {
           <span className="eyebrow">The model's market checks</span>
           <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
             <h1>{passed} of {known} pass</h1>
+            {known < data.checks.length ? <span className="muted">({data.checks.length - known} not known yet)</span> : null}
             <Tag tone={data.level === "strong" ? "up" : data.level === "caution" ? "warn" : "down"}>{data.level}</Tag>
           </div>
           <p className="muted">{data.note}</p>
@@ -128,7 +130,17 @@ export default function MarketPage() {
               {data.checks.map((check) => <Check key={check.name} passed={check.passed}>{check.name}</Check>)}
             </div>
           </Panel>
-          <Panel title="Markets" aside="last day">
+          <Panel title="Avoid: weakest scores" aside="not to buy; leave if you hold one">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {data.avoid.map((item) => (
+                <Link key={item.symbol} to={`/stocks/${item.symbol}`} className="pill"
+                  style={{ background: "var(--down-bg)", color: "var(--text)" }}>
+                  {item.symbol} <span className="muted small">score {Math.round(item.score)}</span>
+                </Link>
+              ))}
+            </div>
+          </Panel>
+          <Panel title="Other markets" aside="last saved; Nifty, VIX, rupee and Brent are live at the top">
             {data.markets.map((market) => (
               <div key={market.name} style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                 <span className="muted">{market.name}</span>

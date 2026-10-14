@@ -1,13 +1,11 @@
 // The frame around every page: top bar, update progress, and the pages themselves.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { NavLink, Route, Routes, useNavigate } from "react-router-dom";
-import { getJson, Job, postJson, Status } from "./api";
+import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { getJson, Job, postJson, Status, Strip } from "./api";
 import { Logo } from "./components/ui";
 import { pct, num } from "./format";
 import TodayPage from "./pages/Today";
-import BeforeOpenPage from "./pages/BeforeOpen";
-import NewsPage from "./pages/News";
-import MarketPage from "./pages/Market";
+import MarketHub, { MARKET_TABS } from "./pages/MarketHub";
 import StockPage from "./pages/Stock";
 import TradesPage from "./pages/Trades";
 
@@ -86,8 +84,27 @@ function JobBar({ job, onClose }: { job: Job | null; onClose: () => void }) {
   );
 }
 
+// Live Nifty, India VIX, dollar-rupee and Brent for the top bar, asked every minute.
+function useLiveStrip() {
+  const [strip, setStrip] = useState<(Strip & { time?: string })[] | null>(null);
+  useEffect(() => {
+    let stopped = false;
+    const ask = () => {
+      if (document.visibilityState === "hidden") return;
+      getJson<(Strip & { time?: string })[]>("/api/live-indices")
+        .then((found) => { if (!stopped && found.length) setStrip(found); }).catch(() => {});
+    };
+    ask();
+    const timer = window.setInterval(ask, 60_000);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, []);
+  return strip;
+}
+
 export default function App() {
   const [theme, setTheme] = useState(savedTheme);
+  const { pathname } = useLocation();
+  const liveStrip = useLiveStrip();
   const [status, setStatus] = useState<Status | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [version, setVersion] = useState(0);
@@ -127,27 +144,31 @@ export default function App() {
   }, []);
 
   const showJob = job && (job.running || (job.finished !== jobSeen && (job.message || job.error)));
-  const pages = [
-    ["/", "Today"], ["/before-open", "Before open"], ["/news", "News & movers"],
-    ["/market", "Market"], ["/stocks/CHENNPETRO", "Stocks"], ["/trades", "Trades"],
+  // Three places: act (Today), understand (Market), look things up and keep records (Stocks & trades).
+  const marketPaths = MARKET_TABS.map(([path]) => path);
+  const pages: [string, string, boolean][] = [
+    ["/", "Today", pathname === "/"],
+    ["/market", "Market", marketPaths.includes(pathname)],
+    ["/trades", "Stocks & trades", pathname.startsWith("/trades") || pathname.startsWith("/stocks")],
   ];
+  const strip = liveStrip ?? status?.strip ?? [];
 
   return (
     <AppContext.Provider value={{ version, theme, status, startJob, job }}>
       <header className="topbar">
         <NavLink to="/" className="brand" aria-label="Kasauti, Today"><Logo /><span>Kasauti</span></NavLink>
         <nav className="nav" aria-label="Pages">
-          {pages.map(([path, label]) => (
-            <NavLink key={label} to={path} end={path === "/"}
-              className={({ isActive }) => (isActive || (label === "Stocks" && location.pathname.startsWith("/stocks")) ? "active" : "")}>
+          {pages.map(([path, label, active]) => (
+            <NavLink key={label} to={path} end={path === "/"} className={active ? "active" : ""}
+              aria-current={active ? "page" : undefined}>
               {label}
             </NavLink>
           ))}
         </nav>
         <div className="strip">
-          {status?.strip.map((item) => (
+          {strip.map((item) => (
             <div className="strip-item" key={item.name}>
-              <span className="label">{item.name}</span>
+              <span className="label">{item.name}{liveStrip ? <span className="live-dot" title="live" aria-label="live" /> : null}</span>
               <span className="value num">{num(item.value)}{" "}
                 <span className={item.name === "India VIX" ? (item.change < 0 ? "up" : "down") : item.change >= 0 ? "up" : "down"}>
                   {pct(item.change, 2)}
@@ -165,9 +186,7 @@ export default function App() {
       <main className="page">
         <Routes>
           <Route path="/" element={<TodayPage />} />
-          <Route path="/before-open" element={<BeforeOpenPage />} />
-          <Route path="/news" element={<NewsPage />} />
-          <Route path="/market" element={<MarketPage />} />
+          {marketPaths.map((path) => <Route key={path} path={path} element={<MarketHub />} />)}
           <Route path="/stocks/:symbol" element={<StockPage />} />
           <Route path="/trades" element={<TradesPage />} />
           <Route path="*" element={<TodayPage />} />

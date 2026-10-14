@@ -29,12 +29,39 @@ test("before the open lists likely movers on both sides", async ({ page }) => {
   if (data.down.length) await expect(page.getByRole("table")).toContainText(data.down[0].symbol);
 });
 
-test("news page shows the test result and the movers", async ({ page }) => {
+test("news ideas show the test result and what usually happens after news", async ({ page }) => {
   await mockApi(page);
   await page.goto("/news");
   await expect(page.getByText(/Tested on one year/)).toBeVisible();
-  await page.getByRole("button", { name: /Heavy selling/ }).click();
   await expect(page.getByRole("heading", { name: "What usually happens after news" })).toBeVisible();
+});
+
+test("mood and movers show both sides", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/movers");
+  await expect(page.getByText(/^Mood:/)).toBeVisible();
+  await page.getByRole("button", { name: /Heavy selling/ }).click();
+  await expect(page.getByRole("button", { name: /Heavy selling/ })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("before the open says when the market has already opened", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/before-open");
+  await expect(page.getByTestId("stage-note")).toContainText("this morning's guesses");
+});
+
+test("trades show the gain at live prices", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/trades");
+  // TESTCO: 10 shares bought at 100, live 106 in the sample data
+  await expect(page.getByTestId("open-gain")).toContainText("60");
+  await expect(page.getByText("Worth now (live)")).toBeVisible();
+});
+
+test("market health lists the weakest scores", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/market");
+  await expect(page.getByRole("heading", { name: /Avoid: weakest scores/ })).toBeVisible();
 });
 
 test("market page shows the backtest against Nifty", async ({ page }) => {

@@ -24,20 +24,10 @@ PAGE = ROOT / "web" / "dist"
 app = FastAPI(title="Kasauti", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
 
-def _warm_up():
-    """Load the data and the slow pages once at start, so the first clicks are quick."""
-    for build in (views.today_page, views.news_page, views.movers_page,
-                  lambda: views.stock_page("RELIANCE"), views.before_open, views.market_page):
-        try:
-            build()
-        except Exception:
-            pass                       # the page shows its own error when opened
-
-
 @app.on_event("startup")
 def _start():
     if not getattr(app.state, "testing", False):
-        threading.Thread(target=_warm_up, daemon=True).start()
+        threading.Thread(target=views.warm_up, daemon=True).start()
 
 
 @app.exception_handler(Exception)
@@ -53,6 +43,18 @@ def status():
 @app.get("/api/today")
 def today(money: float | None = None):
     return views.today_page(money)
+
+
+@app.get("/api/live")
+def live(symbols: str = ""):
+    """Live prices for a few stocks (comma separated), for the Today page."""
+    return views.live_prices(symbols.split(","))
+
+
+@app.get("/api/live-indices")
+def live_indices():
+    """Live Nifty, India VIX, dollar-rupee and Brent for the top bar."""
+    return views.live_indices()
 
 
 @app.get("/api/before-open")

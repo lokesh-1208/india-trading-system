@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { postJson, Trades, useApi } from "../api";
 import { useApp } from "../App";
 import { Empty, Loading, Panel, Problem } from "../components/ui";
+import { clock, useLive } from "../components/live";
 import { day, pct, price, rupees, signedRupees } from "../format";
 
 const todayText = () => new Date().toISOString().slice(0, 10);
@@ -14,10 +15,18 @@ export default function TradesPage() {
   const [buy, setBuy] = useState({ symbol: "", date: todayText(), price: "", quantity: "", note: "" });
   const [sell, setSell] = useState({ row: "", date: todayText(), price: "" });
   const [message, setMessage] = useState<{ tone: string; text: string } | null>(null);
+  const openSymbols = data ? Array.from(new Set(data.open.map((row) => row.symbol))).sort() : [];
+  const { live } = useLive(openSymbols);
 
   if (error) return <Problem error={error} retry={reload} />;
   if (!data) return <Loading count={3} height={120} />;
   const totals = data.totals;
+  // With live prices, value and gain are for now; without them, at the last close.
+  const nowPrice = (symbol: string, last: number) => live?.prices[symbol]?.price ?? last;
+  const liveValue = data.open.reduce((sum, row) => sum + nowPrice(row.symbol, row.last_price) * row.quantity, 0);
+  const isLive = !!live && data.open.some((row) => live.prices[row.symbol]);
+  const value = isLive ? liveValue : totals.value;
+  const openGain = isLive ? liveValue - totals.invested : totals.open_gain;
 
   const submitBuy = (event: FormEvent) => {
     event.preventDefault();
@@ -36,11 +45,14 @@ export default function TradesPage() {
   return (
     <>
       <h1>Your trades</h1>
+      <p className="small muted" style={{ marginTop: -8 }}>Look up any stock with "Find a stock" at the top.</p>
       <div className="grid-tiles">
         <div className="tile"><span className="name">Money in the market</span><span className="value num">{rupees(totals.invested)}</span></div>
-        <div className="tile"><span className="name">Worth at the last close</span><span className="value num">{rupees(totals.value)}</span></div>
-        <div className="tile"><span className="name">Gain on open positions</span>
-          <span className={`value num ${totals.open_gain >= 0 ? "up" : "down"}`}>{signedRupees(totals.open_gain)}</span></div>
+        <div className="tile"><span className="name">{isLive ? "Worth now (live)" : "Worth at the last close"}</span>
+          <span className="value num" data-testid="worth">{rupees(value)}</span>
+          {isLive ? <span className="note">{rupees(totals.value)} at the last close · {clock(live?.time)}</span> : null}</div>
+        <div className="tile"><span className="name">{isLive ? "Gain now (live)" : "Gain on open positions"}</span>
+          <span className={`value num ${openGain >= 0 ? "up" : "down"}`} data-testid="open-gain">{signedRupees(openGain)}</span></div>
         <div className="tile"><span className="name">Closed trades, after charges</span>
           <span className={`value num ${totals.closed_net >= 0 ? "up" : "down"}`}>{signedRupees(totals.closed_net)}</span>
           <span className="note">{totals.tax_estimate ? `tax about ${rupees(totals.tax_estimate)}` : `${totals.closed_count} closed`}</span></div>
@@ -55,7 +67,7 @@ export default function TradesPage() {
               <div className="table-wrap">
                 <table>
                   <thead><tr><th>Stock</th><th>Bought</th><th className="right">Price</th><th className="right">Qty</th>
-                    <th className="right">Last</th><th className="right">Gain</th></tr></thead>
+                    <th className="right">{isLive ? "Live" : "Last close"}</th><th className="right">Gain</th></tr></thead>
                   <tbody>
                     {data.open.map((row) => (
                       <tr key={row.row}>
@@ -63,8 +75,12 @@ export default function TradesPage() {
                         <td className="small">{day(row.buy_date)}</td>
                         <td className="right num">{price(row.buy_price)}</td>
                         <td className="right num">{row.quantity}</td>
-                        <td className="right num">{price(row.last_price)}</td>
-                        <td className={`right num ${row.gain >= 0 ? "up" : "down"}`}>{signedRupees(row.gain)} ({pct(row["gain_%"])})</td>
+                        <td className="right num">{price(nowPrice(row.symbol, row.last_price))}</td>
+                        {(() => {
+                          const gain = (nowPrice(row.symbol, row.last_price) - row.buy_price) * row.quantity;
+                          const gainPct = (nowPrice(row.symbol, row.last_price) / row.buy_price - 1) * 100;
+                          return <td className={`right num ${gain >= 0 ? "up" : "down"}`}>{signedRupees(gain)} ({pct(gainPct)})</td>;
+                        })()}
                       </tr>
                     ))}
                   </tbody>

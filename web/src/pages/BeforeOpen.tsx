@@ -46,6 +46,12 @@ export default function BeforeOpenPage() {
 
   return (
     <>
+      {data.stage === "open" || data.stage === "after" ? (
+        <div className="notice warn" role="note" data-testid="stage-note">
+          The market {data.stage === "open" ? "is open" : "has closed"}: these were this morning's guesses. For prices now,
+          see the live prices on the Today page.
+        </div>
+      ) : null}
       <section className="hero" aria-label="Before the open">
         <div className="panel plan">
           <span className="eyebrow">Since the close on {dateTime(data.since)}</span>

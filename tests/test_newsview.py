@@ -84,3 +84,15 @@ def test_ideas_split_into_buys_and_exits_with_the_model_view():
     assert buys["symbol"].tolist() == ["GOOD"] and buys.iloc[0]["agree"] == "yes"
     assert set(exits["symbol"]) == {"BAD", "MINE"}
     assert exits.set_index("symbol").loc["MINE", "idea"].startswith("You hold it")
+
+
+def test_filing_pdfs_soften_routine_fraud_and_supplier_insolvency_filings():
+    # 12 Oct 2026, Bank of India: a borrower's NPA account declared as fraud (routine for a bank)
+    bank = "Fraud/Default/Arrest NPA as detailed below has been declared as fraud. Reported to RBI"
+    assert newsview.read("Legal and regulatory", bank) == (0, "Bank reported a borrower's fraud (routine)")
+    # 8 Oct 2026, Polycab: a supplier's Rs 2.79 crore claim admitted by NCLT
+    supplier = ("Corporate Insolvency Resolution Process Asier Metals ('Operational Creditor') "
+                "vs Polycab India Limited ('Corporate Debtor')")
+    assert newsview.read("Legal and regulatory", supplier)[0] == -1
+    # Without the PDF the title alone still reads as clearly bad
+    assert newsview.read("Legal and regulatory", "Corporate Insolvency Resolution Process")[0] == -2

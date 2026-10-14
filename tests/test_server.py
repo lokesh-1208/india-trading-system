@@ -89,3 +89,27 @@ def test_clean_turns_numpy_and_missing_values_into_json():
     cleaned = views.clean({"a": np.float64(1.5), "b": float("nan"), "c": pd.Timestamp("2026-10-13"),
                            "d": [np.int64(3), np.bool_(True)]})
     assert cleaned == {"a": 1.5, "b": None, "c": "2026-10-13T00:00:00", "d": [3, True]}
+
+
+def test_list_summary_says_why_the_buy_section_is_short():
+    table = pd.DataFrame({"status": ["You hold", "You hold", "Missed", "Missed", "Missed",
+                                     "Trend broke", "Buy", "Buy"]})
+    text = views.list_summary(table, 3, True)
+    assert text.startswith("This week's list has 8 stocks: you already hold 2; 3 ran more")
+    assert "1 closed below the 20-day average" in text
+    assert text.endswith("2 can be bought today, with room for 3 new stocks.")
+    assert views.list_summary(table, 3, False).endswith("nothing is bought today.")
+    assert views.list_summary(pd.DataFrame({"status": ["Missed"]}), 3, True).endswith(
+        "None of them can be bought today.")
+
+
+def test_missing_flow_days_lists_trading_days_the_update_missed():
+    days = pd.to_datetime(["2026-10-08", "2026-10-09", "2026-10-12", "2026-10-13"])
+    missed = views.missing_flow_days(["2026-10-09", "2026-10-13"], days)
+    assert missed == [pd.Timestamp("2026-10-12")]       # 8 Oct is before the first saved day
+    assert views.missing_flow_days([], days) == []
+
+
+def test_next_list_is_the_coming_monday():
+    assert views.next_list_day("2026-10-12") == pd.Timestamp("2026-10-19")
+    assert views.next_list_day("2026-10-16") == pd.Timestamp("2026-10-19")

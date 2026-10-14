@@ -50,7 +50,7 @@ export function Panel({ title, aside, children, id }: {
 }
 
 /** The price bar on a buy card: stop-loss, the buy zone up to the limit, and the last close. */
-export function Ladder({ ladder }: { ladder: LadderShape }) {
+export function Ladder({ ladder, lastLabel = "last" }: { ladder: LadderShape; lastLabel?: string }) {
   const span = ladder.high - ladder.low || 1;
   const at = (value: number) => `${Math.max(0, Math.min(100, ((value - ladder.low) / span) * 100)).toFixed(1)}%`;
   const zoneLeft = at(ladder.stop);
@@ -58,14 +58,14 @@ export function Ladder({ ladder }: { ladder: LadderShape }) {
   return (
     <div className="ladder">
       <div className="bar" role="img"
-        aria-label={`Stop-loss ${price(ladder.stop)}, last ${price(ladder.last)}, buy limit ${price(ladder.limit)}`}>
+        aria-label={`Stop-loss ${price(ladder.stop)}, ${lastLabel} ${price(ladder.last)}, buy limit ${price(ladder.limit)}`}>
         <div className="zone" style={{ left: zoneLeft, width: zoneWidth }} />
         <div className="stop" style={{ left: at(ladder.stop) }} />
         <div className="dot" style={{ left: at(ladder.last) }} />
       </div>
       <div className="labels num">
         <span>stop {price(ladder.stop)}</span>
-        <span>last {price(ladder.last)}</span>
+        <span>{lastLabel} {price(ladder.last)}</span>
         <span>limit {price(ladder.limit)}</span>
       </div>
     </div>

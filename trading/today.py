@@ -106,6 +106,66 @@ def buy_list(plan, money, count=10, results_due=None):
         columns="_order").reset_index(drop=True)
 
 
+def money_plan(capital, open_cost, holdings_value, closed_net, positions, held, share, picks):
+    """How much to put in today, from the money you actually have.
+
+    Follows the backtest's sizing rule exactly: each new buy gets
+    (cash + holdings at their value) / positions x share, but never more than the
+    cash left. Picks are bought in list order until the free places or the cash run out.
+
+    capital:        the total money you set aside for trading
+    open_cost:      what your open positions cost
+    holdings_value: what they are worth now
+    closed_net:     profit (or loss) on closed trades after charges, which stays in the account
+    held:           how many positions are open
+    share:          1.0 in a strong market, 0.75 in caution
+    picks:          [(symbol, buy limit)] buyable now, best first
+    Returns a dictionary for the page.
+    """
+    cash = max(0.0, capital + closed_net - open_cost)
+    account = cash + holdings_value
+    per_stock = account / positions * share
+    places = max(0, positions - held)
+    left = cash
+    buys = []
+    for symbol, limit in picks:
+        if len(buys) >= places:
+            break
+        budget = min(per_stock, left / 1.002)            # leave room for charges
+        shares = math.floor(budget / limit) if limit > 0 else 0
+        if shares < 1:
+            continue
+        amount = shares * limit
+        left -= amount
+        buys.append({"symbol": symbol, "shares": shares, "limit": round(limit, 2),
+                     "amount": round(amount)})
+    open_places = places - len(buys)
+    reserve = min(left, open_places * per_stock)       # kept for places still empty
+    idle = max(0.0, left - reserve)
+    if places == 0:
+        note = f"All {positions} places are full: no new buys until something is sold."
+    elif cash < per_stock * 0.25:
+        note = "Your holdings already use your trading money: add money or wait for a sale."
+    elif not buys:
+        note = "Nothing buyable on this week's list right now: keep the cash."
+    elif open_places > 0:
+        note = (f"Keep ₹{reserve:,.0f} for the {open_places} empty place"
+                f"{'s' if open_places != 1 else ''}: a later list fills "
+                f"{'them' if open_places != 1 else 'it'}.")
+    else:
+        note = "All places will be full."
+    if idle >= 1000 and places > 0 and cash >= per_stock * 0.25:
+        why = ("the market is in caution, so each place gets 75%" if share < 1
+               else "holdings bought for less than a full place leave money over")
+        note += f" ₹{idle:,.0f} stays as cash ({why})."
+    return {"capital": round(capital), "account": round(account), "cash": round(cash),
+            "invested": round(open_cost), "holdings_value": round(holdings_value),
+            "per_stock": round(per_stock), "share": share, "places": places,
+            "buys": buys, "spend": round(sum(item["amount"] for item in buys)),
+            "cash_after": round(left), "open_places_after": open_places,
+            "reserve": round(reserve), "idle": round(idle), "note": note}
+
+
 def my_stocks(plan, positions, trend_lines, last_day=None):
     """Your open positions with what to do about each.
 

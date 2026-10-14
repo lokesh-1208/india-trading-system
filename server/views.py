@@ -177,7 +177,10 @@ def today_page(money=None):
 
     money = float(config.CAPITAL if money is None else money)
     share = built.amount_share()
-    per_stock = money / rules["positions"] * share
+    # Amount per stock as in the backtest: (cash + holdings' value) / positions x share.
+    account_totals = journal.totals(trades, prices, last_day)
+    cash = max(0.0, money + account_totals["closed_net"] - account_totals["invested"])
+    per_stock = (cash + account_totals["value"]) / rules["positions"] * share
 
     # ---- the weekly list and its status today ----
     log = STORE.picks_log()
@@ -189,6 +192,12 @@ def today_page(money=None):
     buy_now = status_table[status_table["status"] == "Buy"].head(places)
     buy_symbols = set(buy_now["symbol"])
     ranking = plan["today"]
+    buyable = status_table[status_table["status"] == "Buy"]
+    money_plan = today.money_plan(
+        money, account_totals["invested"], account_totals["value"],
+        account_totals["closed_net"], rules["positions"], len(held), share,
+        list(zip(buyable["symbol"], buyable["limit"])) if plan["market_ok"] else [])
+    planned = {item["symbol"]: item["shares"] for item in money_plan["buys"]}
 
     def about(symbol, rank=None, score=None):
         parts = []
@@ -214,7 +223,8 @@ def today_page(money=None):
         item = {"symbol": row.symbol, "rank": row.rank, "score": row.score,
                 "about": about(row.symbol, row.rank, row.score),
                 "ladder": _ladder(stop, row.close, row.limit, row.last),
-                "shares": int(per_stock // row.limit) if row.limit > 0 else 0,
+                "shares": planned.get(row.symbol, int(per_stock // row.limit) if row.limit > 0
+                                      else 0),
                 "kind": row.kind, "status": row.status}
         item["amount"] = item["shares"] * row.limit
         if row.symbol in buy_symbols:
@@ -243,6 +253,9 @@ def today_page(money=None):
     weakest = set(today.avoid_list(plan)["symbol"])
     for row in holds:
         row["weakest"] = row["symbol"] in weakest      # among the model's weakest scores
+        # Size against the plan: the model never adds to a holding, so this is information.
+        value = row["last_price"] * row["quantity"]
+        row["size_vs_plan"] = round(value / per_stock, 2) if per_stock > 0 else None
 
     # ---- the headline ----
     to_buy = len([item for item in buys if item["tag"] == "Buy"]) if plan["market_ok"] else 0
@@ -290,6 +303,7 @@ def today_page(money=None):
         "list_from": weekly["signal_day"].iloc[0] if len(weekly) else None,
         "next_list": next_list_day(list_day),
         "headline": headline, "nothing_to_sell": not sells, "explain": explain,
+        "money_plan": money_plan,
         "market": {"level": plan["market_level"], "note": plan["market_note"],
                    "ok": bool(plan["market_ok"]), "share": share, "per_stock": per_stock,
                    "money": money, "positions": rules["positions"],

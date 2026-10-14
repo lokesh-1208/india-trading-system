@@ -33,6 +33,15 @@ test.describe("Today page", () => {
     await expect(page.locator("#week table")).toContainText("back in range");
   });
 
+  test("the money plan says how much to put in from the cash you have", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/");
+    const plan = page.getByTestId("money-plan");
+    await expect(plan).toContainText("Put in now: ₹28,501");
+    await expect(plan).toContainText("CHENNPETRO 9 shares");
+    await expect(plan).toContainText("Keep ₹15,059 for the 1 empty place");
+  });
+
   test("buy card opens the stock page", async ({ page }) => {
     await mockApi(page);
     await page.goto("/");

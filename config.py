@@ -193,6 +193,17 @@ MODEL_GOLD_RISE_MAX = 0.08     # gold up more than 8% in a month (money running 
 MODEL_MONTH_DAYS = 21          # trading days in "a month" for the checks above
 MODEL_QUARTER_LAG_DAYS = 45    # a quarter's results are used from this long after it ends
 MODEL_NEWS_DAYS = 30
+# How the news group scores a stock's filings in the last MODEL_NEWS_DAYS:
+#   "types": by filing type only (orders +1, dividends +0.5, legal -1, ...): the original
+#   "lean":  each filing read as good or bad (-2..+2) by the news reader: results numbers,
+#            rating up/down, auditor quitting, fraud, ... (trading/newsview.py rules, no
+#            learning from later prices, so a backtest sees only what was known that day)
+MODEL_NEWS_MODE = "types"
+# The twelve-point scorecard inside the business group:
+#   "fixed":    rule-of-thumb numbers (ROE >= 15%, margin >= 10%, ...): the original
+#   "industry": each check against the company's own industry median
+#   "off":      no scorecard (its checks repeat business factors already scored)
+MODEL_SCORECARD = "fixed"
 
 # Two ways to trade the same score. "swing" is checked every week and holds
 # for days to a few weeks; "monthly" is checked once a month.

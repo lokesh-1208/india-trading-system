@@ -2,7 +2,7 @@
 // Context (before the open, news, movers, market health) lives on the Market page.
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { BeforeOpen, Holding, LivePrice, Movers, Today, WeekRow, useApi } from "../api";
+import { BeforeOpen, Holding, LivePrice, MoneyPlan, Movers, Today, WeekRow, useApi } from "../api";
 import { useApp } from "../App";
 import { Empty, Ladder, Loading, Panel, Problem, Section, Tag } from "../components/ui";
 import { clock, LiveNote, useLive } from "../components/live";
@@ -64,8 +64,42 @@ function HoldCard({ row, quote }: { row: Holding; quote?: LivePrice }) {
           </span>
         )}
         <span className="small muted">day {holdingDay(row.bought)} of holding</span>
+        {row.size_vs_plan != null && row.size_vs_plan < 0.8 ? (
+          <span className="small muted" title="The model never adds to a holding; this is for information.">
+            {Math.round(row.size_vs_plan * 100)}% of today's place size
+          </span>
+        ) : null}
       </div>
     </Link>
+  );
+}
+
+// How much to put in now, from the money you actually have (the backtest's own sizing rule).
+function MoneyPlanPanel({ plan }: { plan: MoneyPlan }) {
+  return (
+    <div className="panel money" data-testid="money-plan">
+      <div className="grid-tiles">
+        <div className="tile"><span className="name">Your trading money</span>
+          <span className="value num">{rupees(plan.account)}</span>
+          <span className="note">{rupees(plan.capital)} set aside{plan.account !== plan.capital ? ", with gains and losses" : ""}</span></div>
+        <div className="tile"><span className="name">In stocks</span>
+          <span className="value num">{rupees(plan.holdings_value)}</span>
+          <span className="note">cost {rupees(plan.invested)}</span></div>
+        <div className="tile"><span className="name">Cash free</span>
+          <span className="value num">{rupees(plan.cash)}</span>
+          <span className="note">{plan.places} of 5 places free</span></div>
+        <div className="tile"><span className="name">Per stock now</span>
+          <span className="value num">{rupees(plan.per_stock)}</span>
+          <span className="note">{plan.share < 1 ? `${Math.round(plan.share * 100)}% of a full place (caution)` : "a full place"}</span></div>
+      </div>
+      {plan.buys.length ? (
+        <p style={{ margin: 0 }}>
+          <strong>Put in now: {rupees(plan.spend)}</strong>{" "}
+          <span className="muted">({plan.buys.map((item) => `${item.symbol} ${item.shares} shares at up to ₹${price(item.limit)}`).join(" · ")})</span>
+        </p>
+      ) : null}
+      <p className="small muted" style={{ margin: 0 }}>{plan.note}</p>
+    </div>
   );
 }
 
@@ -118,15 +152,31 @@ const STATUS_TONE: Record<string, string> = {
   "Results soon": "warn", "Too costly": "plain", "Market weak": "warn",
 };
 
-function WeekTable({ rows, days, quote }: { rows: WeekRow[]; days: string[]; quote: (s: string) => LivePrice | undefined }) {
+// One short reason per status, on one line (the full sentence is in the tooltip).
+function shortWhy(row: WeekRow) {
+  switch (row.status) {
+    case "Missed": return `ran past ₹${price(row.limit)}`;
+    case "Trend broke": return "below 20-day avg";
+    case "Results soon": return "results within 5 days";
+    case "Too costly": return "one share > amount";
+    default: return "";
+  }
+}
+
+function WeekTable({ rows, days, quote, liveTime }: {
+  rows: WeekRow[]; days: string[]; quote: (s: string) => LivePrice | undefined; liveTime?: string;
+}) {
+  const dayNames = days.map((list) => new Date(list).toLocaleDateString("en-IN", { weekday: "short" }));
   return (
     <div className="table-wrap">
-      <table>
+      <table className="week-table">
         <thead>
           <tr>
-            <th>Stock</th><th>Today</th><th>Why</th><th className="right">Live</th>
-            {days.map((list) => <th key={list} className="right">{day(list)}</th>)}
-            <th className="right">Since picked</th><th className="right">Nifty</th>
+            <th>Stock</th>
+            <th>Today</th>
+            <th className="right">Live{liveTime ? ` · ${liveTime}` : ""}</th>
+            <th className="right" title="Rank on each day's list this week">Rank {dayNames.join(" · ")}</th>
+            <th className="right">Since picked</th>
           </tr>
         </thead>
         <tbody>
@@ -134,19 +184,31 @@ function WeekTable({ rows, days, quote }: { rows: WeekRow[]; days: string[]; quo
             const now = quote(row.symbol);
             const backInRange = row.status === "Missed" && now && now.price <= row.limit;
             const aboveNow = (row.status === "Buy" || row.status === "Backup") && now && now.price > row.limit;
+            const change = now?.["change_%"];
             return (
               <tr key={row.symbol}>
                 <td><Link to={`/stocks/${row.symbol}`} style={{ color: "var(--text)", fontWeight: 600 }}>{row.symbol}</Link></td>
-                <td><Tag tone={STATUS_TONE[row.status] ?? "plain"}>{row.status}</Tag></td>
-                <td className="small muted num">{row.why}</td>
-                <td className="right" style={{ whiteSpace: "nowrap" }}>
-                  <LiveNote quote={now} />
+                <td title={row.why || undefined}>
+                  <Tag tone={STATUS_TONE[row.status] ?? "plain"}>{row.status}</Tag>
+                  {shortWhy(row) ? <span className="small muted"> {shortWhy(row)}</span> : null}
+                </td>
+                <td className="right num">
+                  {now ? <>₹{price(now.price)}{" "}
+                    {change != null ? <span className={change >= 0 ? "up" : "down"}>{pct(change, 1)}</span> : null}</>
+                    : <span className="muted">–</span>}
                   {backInRange ? <div className="small up" style={{ fontWeight: 600 }}>back in range</div> : null}
                   {aboveNow ? <div className="small warn-text" style={{ fontWeight: 600 }}>above limit now</div> : null}
                 </td>
-                {days.map((list) => <td key={list} className="right num">{row.ranks[list] ?? <span className="muted">–</span>}</td>)}
-                <td className={`right num ${(row["since_first_%"] ?? 0) >= 0 ? "up" : "down"}`}>{pct(row["since_first_%"])}</td>
-                <td className="right num muted">{pct(row["nifty_%"])}</td>
+                <td className="right num">
+                  {days.map((list, index) => (
+                    <span key={list}>{index ? <span className="muted"> · </span> : null}
+                      {row.ranks[list] ?? <span className="muted">–</span>}</span>
+                  ))}
+                </td>
+                <td className="right num">
+                  <span className={(row["since_first_%"] ?? 0) >= 0 ? "up" : "down"}>{pct(row["since_first_%"])}</span>
+                  <div className="small muted">Nifty {pct(row["nifty_%"])}</div>
+                </td>
               </tr>
             );
           })}
@@ -200,7 +262,7 @@ export default function TodayPage() {
               {market.checks_pass} of {market.checks_total} market checks pass
               {market.checks_unknown.length ? ` (${market.checks_unknown.length} more not known yet)` : ""}.{" "}
               {market.share < 1
-                ? `Each buy uses ${Math.round(market.share * 100)}%: about ${rupees(market.per_stock)} instead of ${rupees(market.money / market.positions)}.`
+                ? `Each buy uses ${Math.round(market.share * 100)}%: about ${rupees(market.per_stock)} instead of ${rupees(market.per_stock / market.share)}.`
                 : `Each buy uses about ${rupees(market.per_stock)}.`}
             </span>
           </div>
@@ -217,7 +279,7 @@ export default function TodayPage() {
               foreign/Indian institution figures are lost (NSE keeps only the latest day).
             </span>
           ) : null}
-          <label className="small">Money for trading (₹)
+          <label className="small">Your total trading money (₹)
             <input type="number" min={10000} step={5000} value={money}
               onChange={(event) => changeMoney(Number(event.target.value) || 100000)} />
           </label>
@@ -236,6 +298,7 @@ export default function TodayPage() {
           <Section title="Buy from this week's list" id="buy"
             aside={`Limits from the ${day(data.list_from)} close. Place an AMO limit order at the limit.`}>
             {data.explain ? <p className="small muted" data-testid="list-explain" style={{ marginTop: 0 }}>{data.explain}</p> : null}
+            {market.ok ? <MoneyPlanPanel plan={data.money_plan} /> : null}
             <p className="small muted" data-testid="live-status" style={{ marginTop: 0 }}>
               {liveFailed && !live ? "Live prices could not be fetched; showing the last close."
                 : !live ? "Getting live prices…"
@@ -289,7 +352,7 @@ export default function TodayPage() {
                 <strong>This week's list</strong>{" "}
                 <span className="small muted">· {data.week_list.length} stocks · {countBy(data.week_list)} · ranks each day and move since picked</span>
               </summary>
-              <WeekTable rows={data.week_list} days={data.week_days} quote={quote} />
+              <WeekTable rows={data.week_list} days={data.week_days} quote={quote} liveTime={live ? clock(live.time) : undefined} />
               {data.watch.length ? (
                 <p className="small muted" style={{ padding: "0 14px 12px" }}>
                   New on today's list, not this week's (watch only: buying new picks every day did worse in the tests):{" "}

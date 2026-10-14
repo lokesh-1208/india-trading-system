@@ -46,19 +46,26 @@ export type BuyItem = {
   symbol: string; rank: number; score: number; about: string; ladder: Ladder; shares: number;
   amount: number; kind: string; status: string; tag?: string; why?: string;
 };
+export type MoneyPlan = {
+  capital: number; account: number; cash: number; invested: number; holdings_value: number;
+  per_stock: number; share: number; places: number; spend: number; cash_after: number;
+  open_places_after: number; reserve: number; idle: number; note: string;
+  buys: { symbol: string; shares: number; limit: number; amount: number }[];
+};
 export type WeekRow = {
   symbol: string; rank: number; score: number; status: string; why: string; close: number; limit: number;
   last: number; ranks: Record<string, number>; "since_first_%": number | null; "nifty_%": number | null;
 };
 export type Holding = {
   symbol: string; action: "HOLD" | "SELL" | "WAIT"; reason: string; quantity: number; buy_price: number; weakest?: boolean;
+  size_vs_plan?: number | null; peak?: number | null; trail_from?: number | null; trail_active?: boolean;
   last_price: number; "gain_%": number | null; gain_rs: number | null; stop_loss: number;
   trend_line: number | null; bought: string; days_held: number; exit_line: number; exit_pct: number;
   exit_rs: number; gtt: number;
 };
 export type Today = {
   list_day: string; signal_day: string; week_of: string; headline: string; nothing_to_sell: boolean;
-  explain: string; list_from: string | null; next_list: string; week_list: WeekRow[]; week_days: string[];
+  explain: string; money_plan: MoneyPlan; list_from: string | null; next_list: string; week_list: WeekRow[]; week_days: string[];
   market: {
     level: string; note: string; ok: boolean; share: number; per_stock: number; money: number;
     positions: number; checks_pass: number; checks_total: number; checks_unknown: string[]; stop_loss: number; max_gap: number;

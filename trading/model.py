@@ -297,13 +297,15 @@ def market_score(checks):
 
 
 # ------------------------------------------------------------- the score ----
-def combine(factors):
+def combine(factors, weights=None):
     """Turn a table of raw factors into group scores and one total score.
 
     factors: one row per stock, one column per factor (missing columns are
-    treated as unknown). Returns the same table with a column per group and
-    `score`, all from 0 to 100, sorted best first.
+    treated as unknown). weights: {group: weight}, config.MODEL_WEIGHTS when not
+    given. Returns the same table with a column per group and `score`, all from
+    0 to 100, sorted best first.
     """
+    weights = config.MODEL_WEIGHTS if weights is None else weights
     table = factors.copy()
     total = pd.Series(0.0, index=table.index)
     for group, members in GROUPS.items():
@@ -316,9 +318,52 @@ def combine(factors):
             # so a known figure is on average worth the same as an unknown one.
             ranks.append(((signed.rank() - 0.5) / max(signed.count(), 1)).fillna(0.5))
         table[group] = sum(ranks) / len(ranks) * 100
-        total += table[group] * config.MODEL_WEIGHTS[group]
-    table["score"] = total / sum(config.MODEL_WEIGHTS.values())
+        total += table[group] * weights.get(group, 0.0)
+    table["score"] = total / sum(weights.values())
     return table.sort_values("score", ascending=False, kind="stable")
+
+
+def _industry_scorecard(table, industry, financial):
+    """The twelve checks, each against the company's own industry instead of fixed numbers.
+
+    A check passes when the company is at least as good as its industry's median
+    (industries with fewer than 5 scored companies use the whole market's median).
+    """
+    def at_least_median(name, higher_better=True):
+        values = table[name].astype(float)
+        by_industry = values.groupby(industry)
+        median = by_industry.transform("median").where(by_industry.transform("count") >= 5)
+        median = median.fillna(values.median())
+        return values >= median if higher_better else values <= median
+
+    return [
+        at_least_median("sales_growth"), at_least_median("profit_growth"),
+        at_least_median("sales_growth_3y"), at_least_median("profit_growth_3y"),
+        table["quarter_profit_growth"] > 0,
+        at_least_median("return_on_equity"), at_least_median("net_margin"),
+        financial | at_least_median("debt_to_equity", higher_better=False),
+        table["pe"] <= table["industry_pe"],
+        table["dividend_yield"] > 0,
+        financial | at_least_median("roce"),
+        financial | at_least_median("cash_conversion"),
+    ]
+
+
+def latest_shares(annual, quarterly=None):
+    """Each company's most recent share count, {symbol: shares}.
+
+    Prices from Yahoo are adjusted for splits and bonus issues back to today, so the
+    share count that matches them on every past day is today's, not the count filed
+    at the time (that one is 10x off before a 1:10 split). New shares issued since
+    are the only error left, usually a few percent.
+    """
+    tables = [t[["symbol", "period_end", "shares"]] for t in (annual, quarterly)
+              if t is not None and len(t) and "shares" in t]
+    if not tables:
+        return pd.Series(dtype=float)
+    table = pd.concat(tables).dropna(subset=["shares"])
+    table = table[table["shares"] > 0].sort_values("period_end")
+    return table.groupby("symbol")["shares"].last()
 
 
 class Model:
@@ -334,6 +379,7 @@ class Model:
 
         get = tables.get
         self.annual = None if get("annual") is None else annual_factors(get("annual"))
+        self.latest_shares = latest_shares(get("annual"), get("quarterly"))
         self.quarterly = None if get("quarterly") is None else quarterly_factors(get("quarterly"))
         self.ownership = (None if get("holdings") is None
                           else ownership_factors(get("holdings"), get("fund_holders")))
@@ -342,22 +388,38 @@ class Model:
         self.industry = get("industry") or {}
         self.news = get("news")
         self.deals = get("deals")
+        # Each filing read as good or bad once (only used when MODEL_NEWS_MODE is "lean").
+        self.news_read = None
+        if self.news is not None and len(self.news) > 0:
+            from trading import newsview
+            read = newsview.read_all(self.news, None, get("quarterly"), read_pdfs="saved")
+            self.news_read = read[["time", "symbol", "lean"]]
         self.pledges = get("pledges")
 
-        self.checks = market_checks(nifty, markets, get("fii_net"))
-        self.market_score = market_score(self.checks)
-        self.market_ok = (self.market_score >= config.MODEL_MARKET_MIN).fillna(False)
         # A stock is "in trend" while it closes above its short trend line (20-day EMA).
         close = self.prepared["last_close"]
         trend_line = indicators.ema(close, config.EMA_FAST)
         in_trend = (close > trend_line).fillna(False)
+        self.checks = market_checks(nifty, markets, get("fii_net"))
+        # Market breadth: share of liquid stocks above their 20-day EMA (optional check).
+        liquid = self.prepared["liquid"]
+        self.breadth = (in_trend & liquid).sum(axis=1) / liquid.sum(axis=1).replace(0, np.nan)
+        if config.MODEL_BREADTH_MIN:
+            self.checks[f"At least {config.MODEL_BREADTH_MIN:.0%} of stocks above their "
+                        f"{config.EMA_FAST}-day average"] = \
+                (self.breadth >= config.MODEL_BREADTH_MIN).astype(float).where(self.breadth.notna())
+        self.market_score = market_score(self.checks)
+        self.market_ok = (self.market_score >= config.MODEL_MARKET_MIN).fillna(False)
         # Entry quality: how far above the trend line, and how much it rose in 5 days.
         room = close / trend_line - 1
         spike = close / close.shift(config.SPIKE_DAYS) - 1
+        fast_line = indicators.ema(close, config.EMA_PROFIT_TRAIL)
         self.trading = {**self.prepared, "market_ok": self.market_ok, "in_trend": in_trend,
+                        "in_trend_fast": (close > fast_line).fillna(False),
                         "room": room, "spike": spike,
                         "cash_reason": "too few market checks passed"}
         self._cache = {}
+        self.measured_weights = {}       # {position: {group: weight}}, see trading/weights.py
 
     # ---- one day's factors ----
     def factors_on(self, position):
@@ -394,7 +456,10 @@ class Model:
             newer = quarter["quarter_end"] >= year["period_end"]
             profit = quarter["profit_4_quarters"].where(
                 newer & quarter["profit_4_quarters"].notna(), profit)
-        shares = year["shares"] if "shares" in year else pd.Series(np.nan, index=symbols)
+        if config.MODEL_SHARES == "latest":
+            shares = self.latest_shares.reindex(symbols)
+        else:
+            shares = year["shares"] if "shares" in year else pd.Series(np.nan, index=symbols)
         equity = year["equity"] if "equity" in year else pd.Series(np.nan, index=symbols)
         earnings_per_share = (profit / shares).where(shares > 0)
         table["earnings_yield"] = earnings_per_share / close
@@ -426,7 +491,11 @@ class Model:
             financial | (table["roce"] >= config.SCORE_MIN_ROCE),
             financial | (table["cash_conversion"] >= config.SCORE_MIN_CASH_CONVERSION),
         ]
+        if config.MODEL_SCORECARD == "industry":
+            passed = _industry_scorecard(table, industry, financial)
         table["scorecard"] = sum(check.astype(float) for check in passed).where(profit.notna())
+        if config.MODEL_SCORECARD == "off":
+            table["scorecard"] = np.nan
 
         # ---- ownership ----
         owners = _latest(self.ownership, day, "quarter_end", 200).reindex(symbols)
@@ -447,15 +516,22 @@ class Model:
         if self.news is not None and len(self.news) > 0 \
                 and self.news["time"].min() <= day + pd.Timedelta(days=1) \
                 and self.news["time"].max() >= day - pd.Timedelta(days=7):
-            recent = self.news[(self.news["time"] > day - pd.Timedelta(days=config.MODEL_NEWS_DAYS))
-                               & (self.news["time"] < day + pd.Timedelta(days=1))]
+            window = (day - pd.Timedelta(days=config.MODEL_NEWS_DAYS), day + pd.Timedelta(days=1))
+            if config.MODEL_NEWS_MODE == "lean" and self.news_read is not None:
+                read = self.news_read[(self.news_read["time"] > window[0])
+                                      & (self.news_read["time"] < window[1])]
+                table["news_score"] = read.groupby("symbol")["lean"].sum().reindex(symbols) \
+                    .fillna(0.0)
+            recent = self.news[(self.news["time"] > window[0]) & (self.news["time"] < window[1])]
             points = recent["category"].map(NEWS_POINTS).fillna(0.0)
             text = (recent["subject"] + " " + recent["detail"]).str.lower()
             points = points + text.str.contains("upgrad").astype(float) \
                 - text.str.contains("downgrad").astype(float) \
                 - ((recent["category"] == "Management change")
                    & text.str.contains("resign")).astype(float) * 0.5
-            table["news_score"] = points.groupby(recent["symbol"]).sum().reindex(symbols).fillna(0.0)
+            if config.MODEL_NEWS_MODE != "lean" or self.news_read is None:
+                table["news_score"] = points.groupby(recent["symbol"]).sum().reindex(symbols) \
+                    .fillna(0.0)
 
         table["deal_score"] = np.nan
         if self.deals is not None and len(self.deals) > 0 \
@@ -480,8 +556,15 @@ class Model:
     def score_on(self, position):
         """All tradable stocks on that day, scored and sorted best first."""
         if position not in self._cache:
-            self._cache[position] = combine(self.factors_on(position))
+            self._cache[position] = combine(self.factors_on(position), self.weights_on(position))
         return self._cache[position]
+
+    def weights_on(self, position):
+        """The group weights for that day: measured ones when set, else config's."""
+        if not self.measured_weights:
+            return None
+        known = [p for p in self.measured_weights if p <= position]
+        return self.measured_weights[max(known)] if known else None
 
     # ---- using the score ----
     def simulate(self, start=None, end=None, capital=None, style=None, **entry):
@@ -505,9 +588,11 @@ class Model:
             max_gap=rules.get("max_gap"), limit_days=rules.get("limit_days"),
             max_drop=rules.get("max_drop"), min_room=rules.get("min_room"),
             max_spike=rules.get("max_spike"), midweek_fill=rules.get("midweek_fill", False),
-            budget_scale=rules.get("budget_scale"), exit_before=rules.get("exit_before"))
+            budget_scale=rules.get("budget_scale"), exit_before=rules.get("exit_before"),
+            industry=self.industry, max_per_industry=rules.get("max_per_industry"),
+            profit_trail=rules.get("profit_trail"))
 
-    def decision(self, held_symbols, style=None, buy_prices=None):
+    def decision(self, held_symbols, style=None, buy_prices=None, buy_dates=None):
         """What the model says to do now, given the stocks you really hold.
 
         buy_prices: {symbol: the price you paid}. With it, a holding that has
@@ -544,6 +629,24 @@ class Model:
             plan["sell"] = list(dict.fromkeys(plan["sell"] + plan["stopped"]))
             plan["keep"] = [s for s in plan["keep"] if s not in plan["stopped"]]
             plan["candidates"] = [s for s in plan["candidates"] if s not in plan["stopped"]]
+        # Profit trail: once a holding has closed `trigger` above the buy price, sell after a
+        # close `trail` below its highest close since the buy (backtest log, entry 10).
+        plan["trailed"], plan["peaks"] = [], {}
+        trail = rules.get("profit_trail")
+        if trail and buy_prices and buy_dates:
+            close = self.prepared["last_close"]
+            for symbol, paid in buy_prices.items():
+                if symbol not in close or symbol not in buy_dates:
+                    continue
+                since = close[symbol][close.index >= pd.Timestamp(buy_dates[symbol]).normalize()]
+                peak = max([paid] + [float(v) for v in since.dropna()])
+                plan["peaks"][symbol] = peak
+                last = plan["last_price"].get(symbol)
+                if trail.get("trail") and peak >= paid * (1 + trail["trigger"]) \
+                        and last is not None and last <= peak * (1 - trail["trail"]):
+                    plan["trailed"].append(symbol)
+            plan["sell"] = list(dict.fromkeys(plan["sell"] + plan["trailed"]))
+            plan["keep"] = [s for s in plan["keep"] if s not in plan["trailed"]]
         plan["cash_text"] = (f"Fewer than half of the market checks pass. The model buys "
                              "nothing until at least half do.")
         plan["sell_reason"] = "too few market checks pass"

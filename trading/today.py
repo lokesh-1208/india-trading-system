@@ -106,6 +106,66 @@ def buy_list(plan, money, count=10, results_due=None):
         columns="_order").reset_index(drop=True)
 
 
+def money_plan(capital, open_cost, holdings_value, closed_net, positions, held, share, picks):
+    """How much to put in today, from the money you actually have.
+
+    Follows the backtest's sizing rule exactly: each new buy gets
+    (cash + holdings at their value) / positions x share, but never more than the
+    cash left. Picks are bought in list order until the free places or the cash run out.
+
+    capital:        the total money you set aside for trading
+    open_cost:      what your open positions cost
+    holdings_value: what they are worth now
+    closed_net:     profit (or loss) on closed trades after charges, which stays in the account
+    held:           how many positions are open
+    share:          1.0 in a strong market, 0.75 in caution
+    picks:          [(symbol, buy limit)] buyable now, best first
+    Returns a dictionary for the page.
+    """
+    cash = max(0.0, capital + closed_net - open_cost)
+    account = cash + holdings_value
+    per_stock = account / positions * share
+    places = max(0, positions - held)
+    left = cash
+    buys = []
+    for symbol, limit in picks:
+        if len(buys) >= places:
+            break
+        budget = min(per_stock, left / 1.002)            # leave room for charges
+        shares = math.floor(budget / limit) if limit > 0 else 0
+        if shares < 1:
+            continue
+        amount = shares * limit
+        left -= amount
+        buys.append({"symbol": symbol, "shares": shares, "limit": round(limit, 2),
+                     "amount": round(amount)})
+    open_places = places - len(buys)
+    reserve = min(left, open_places * per_stock)       # kept for places still empty
+    idle = max(0.0, left - reserve)
+    if places == 0:
+        note = f"All {positions} places are full: no new buys until something is sold."
+    elif cash < per_stock * 0.25:
+        note = "Your holdings already use your trading money: add money or wait for a sale."
+    elif not buys:
+        note = "Nothing buyable on this week's list right now: keep the cash."
+    elif open_places > 0:
+        note = (f"Keep ₹{reserve:,.0f} for the {open_places} empty place"
+                f"{'s' if open_places != 1 else ''}: a later list fills "
+                f"{'them' if open_places != 1 else 'it'}.")
+    else:
+        note = "All places will be full."
+    if idle >= 1000 and places > 0 and cash >= per_stock * 0.25:
+        why = ("the market is in caution, so each place gets 75%" if share < 1
+               else "holdings bought for less than a full place leave money over")
+        note += f" ₹{idle:,.0f} stays as cash ({why})."
+    return {"capital": round(capital), "account": round(account), "cash": round(cash),
+            "invested": round(open_cost), "holdings_value": round(holdings_value),
+            "per_stock": round(per_stock), "share": share, "places": places,
+            "buys": buys, "spend": round(sum(item["amount"] for item in buys)),
+            "cash_after": round(left), "open_places_after": open_places,
+            "reserve": round(reserve), "idle": round(idle), "note": note}
+
+
 def my_stocks(plan, positions, trend_lines, last_day=None):
     """Your open positions with what to do about each.
 
@@ -115,6 +175,8 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
     since the buy yet, so it is marked WAIT and shows no gain.
     """
     stop = rules()["stop_loss"]
+    trail = rules().get("profit_trail") or {}
+    trailed, peaks = set(plan.get("trailed", [])), plan.get("peaks", {})
     stopped, broken = set(plan.get("stopped", [])), set(plan.get("trend_broken", []))
     sell = set(plan["sell"])
     rows = []
@@ -133,6 +195,9 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
                                           "today's close")
             elif symbol in stopped:
                 action, reason = "SELL", f"{stop:.0%} or more below your buy price (stop-loss)"
+            elif symbol in trailed:
+                action, reason = "SELL", (f"fell {trail['trail']:.0%} from its high after a "
+                                          f"{trail['trigger']:.0%}+ gain (profit trail)")
             elif symbol in broken:
                 action, reason = "SELL", f"closed below its {config.EMA_FAST}-day EMA (trend broke)"
             elif symbol in sell:
@@ -152,6 +217,13 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
             })
             line = rows[-1]["trend_line"]
             exit_line = max(rows[-1]["stop_loss"], line) if line == line else rows[-1]["stop_loss"]
+            # Profit trail: active once the high since the buy is `trigger` above the buy price.
+            peak = peaks.get(symbol)
+            rows[-1]["peak"] = None if peak is None else round(peak, 2)
+            rows[-1]["trail_from"] = round(paid * (1 + trail["trigger"]), 2) if trail else None
+            rows[-1]["trail_active"] = bool(trail and peak and peak >= paid * (1 + trail["trigger"]))
+            if rows[-1]["trail_active"] and trail.get("trail"):
+                exit_line = max(exit_line, peak * (1 - trail["trail"]))
             rows[-1]["exit_line"] = round(exit_line, 2)
             rows[-1]["exit_pct"] = round((exit_line / paid - 1) * 100, 1)
             rows[-1]["exit_rs"] = round((exit_line - paid) * row["quantity"])
@@ -162,7 +234,8 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
     return pd.DataFrame(rows, columns=["symbol", "action", "reason", "quantity", "buy_price",
                                        "last_price", "gain_%", "stop_loss", "trend_line",
                                        "bought", "days_held", "exit_line", "exit_pct",
-                                       "exit_rs", "gtt"])
+                                       "exit_rs", "gtt", "peak", "trail_from",
+                                       "trail_active"])
 
 
 def avoid_list(plan):

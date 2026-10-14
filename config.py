@@ -193,6 +193,25 @@ MODEL_GOLD_RISE_MAX = 0.08     # gold up more than 8% in a month (money running 
 MODEL_MONTH_DAYS = 21          # trading days in "a month" for the checks above
 MODEL_QUARTER_LAG_DAYS = 45    # a quarter's results are used from this long after it ends
 MODEL_NEWS_DAYS = 30
+# How the news group scores a stock's filings in the last MODEL_NEWS_DAYS:
+#   "types": by filing type only (orders +1, dividends +0.5, legal -1, ...): the original
+#   "lean":  each filing read as good or bad (-2..+2) by the news reader: results numbers,
+#            rating up/down, auditor quitting, fraud, ... (trading/newsview.py rules, no
+#            learning from later prices, so a backtest sees only what was known that day)
+MODEL_NEWS_MODE = "types"
+# The twelve-point scorecard inside the business group:
+#   "fixed":    rule-of-thumb numbers (ROE >= 15%, margin >= 10%, ...): the original
+#   "industry": each check against the company's own industry median
+#   "off":      no scorecard (its checks repeat business factors already scored)
+MODEL_SCORECARD = "fixed"
+# Market breadth as a 9th market check: at least this share of liquid stocks above
+# their 20-day EMA. None leaves it out (entry 10 of the backtest log).
+# Share count used for PE, price/book and earnings yield: "latest" (matches the
+# split-adjusted prices on every day) or "filed" (the count at the time: wrong after a
+# split or bonus; the original behaviour, kept for comparison).
+MODEL_SHARES = "latest"
+MODEL_BREADTH_MIN = None       # tested 14 Oct 2026 at 40% and 50%: not adopted (entry 10)
+EMA_PROFIT_TRAIL = 10          # the faster trend line a "fast" profit trail sells on
 
 # Two ways to trade the same score. "swing" is checked every week and holds
 # for days to a few weeks; "monthly" is checked once a month.
@@ -207,6 +226,9 @@ MODEL_STYLES = {
               # of the normal amount. Tested 13 Oct 2026: worst fall -20.7% -> -18.1%,
               # smaller in both halves of the history, growth 19.6% -> 18.7% a year.
               "caution_share": 0.75},
+              # A profit trail ("profit_trail": {"trigger": 0.15, "trail": 0.10}) was tested
+              # on 14 Oct 2026 and not adopted: no clear effect once share counts were fixed
+              # (backtest log, entry 10). The option stays in rotation.simulate.
     "monthly": {"check": "month", "positions": 10, "keep_rank": 20, "buy_rank": 20,
                 "rank_exit": True, "stop_loss": None, "trend_exit": False},
 }

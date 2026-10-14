@@ -244,3 +244,25 @@ def test_profit_is_locked_once_the_exit_line_passes_the_buy_price():
     row = today.my_stocks(_plan(), _positions(paid=300.0, last=340.0), {"HELD": 320.0},
                           last_day=pd.Timestamp("2026-10-12")).iloc[0]
     assert row["exit_pct"] == 6.7 and row["exit_rs"] == 200 and row["gtt"] == 300.0
+
+
+def test_money_plan_follows_the_backtest_sizing_and_the_cash_you_have():
+    # 14 Oct 2026: Rs 2 lakh, two holdings that cost 44,661 (worth 45,057), caution market
+    plan = today.money_plan(200_000, 44_661, 45_057, 0.0, 5, 2, 0.75,
+                            [("CHENNPETRO", 1517.45), ("KOTAKBANK", 449.82)])
+    assert plan["cash"] == 155_339 and plan["per_stock"] == 30_059
+    assert [(b["symbol"], b["shares"]) for b in plan["buys"]] == [("CHENNPETRO", 19), ("KOTAKBANK", 66)]
+    assert plan["open_places_after"] == 1 and plan["reserve"] == 30_059
+    assert "caution" in plan["note"]
+
+
+def test_money_plan_never_spends_more_than_the_cash_left():
+    plan = today.money_plan(60_000, 50_000, 50_000, 0.0, 5, 3, 1.0,
+                            [("AAA", 1000.0), ("BBB", 1000.0)])
+    assert plan["cash"] == 10_000
+    assert sum(b["amount"] for b in plan["buys"]) <= 10_000
+
+
+def test_money_plan_with_full_places_buys_nothing():
+    plan = today.money_plan(100_000, 90_000, 95_000, 0.0, 5, 5, 1.0, [("AAA", 100.0)])
+    assert plan["buys"] == [] and "full" in plan["note"]

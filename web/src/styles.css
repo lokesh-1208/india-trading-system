@@ -235,3 +235,5 @@ details.week[open] > summary::before { content: "▾"; }
 /* Live marker in the top bar */
 .live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--up);
   margin-left: 6px; vertical-align: middle; }
+.panel.money { display: flex; flex-direction: column; gap: 10px; margin-bottom: 4px; }
+.week-table td, .week-table th { white-space: nowrap; vertical-align: top; }

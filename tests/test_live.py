@@ -43,3 +43,21 @@ def test_market_hours_are_weekdays_9_15_to_3_30():
     assert not live.market_open(datetime(2026, 10, 14, 9, 14))
     assert not live.market_open(datetime(2026, 10, 14, 15, 31))
     assert not live.market_open(datetime(2026, 10, 17, 11, 0))   # Saturday
+
+
+def test_indices_are_named_for_the_top_bar():
+    live.clear_cache()
+    found = live.indices(fetch=lambda ticker: live.parse(_answer(22700.0, 22721.95)))
+    assert set(found) == {"Nifty 50", "India VIX", "USD/INR", "Brent"}
+    live.clear_cache()
+
+
+def test_previous_close_comes_from_the_daily_bars_not_yahoos_stale_figure():
+    # 14 Oct 2026: Yahoo said Nifty's previous close was 22,363 (12 Oct); it was 22,722 (13 Oct).
+    day = 86400
+    today = 1791955000                       # 14 Oct 2026, about 11:00 India time
+    answer = _answer(22627.25, 22363.3, stamp=today)
+    answer["chart"]["result"][0]["timestamp"] = [today - 2 * day, today - day, today]
+    answer["chart"]["result"][0]["indicators"] = {"quote": [{"close": [22363.35, 22721.95, 22629.2]}]}
+    row = live.parse(answer)
+    assert row["previous_close"] == 22721.95 and row["change_%"] == -0.42

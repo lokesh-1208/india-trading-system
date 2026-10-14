@@ -69,6 +69,10 @@ class Store:
     def nifty(self):
         return self._get("nifty", lambda: data.load_market(config.BENCHMARK))
 
+    def closed_nifty(self):
+        """Nifty up to the last day with stock closes (without today's unfinished day)."""
+        return self._get("closed_nifty", lambda: model.up_to_last_close(self.nifty(), self.stocks()))
+
     def model(self):
         return self._get("model", lambda: model.from_disk(self.stocks(), self.nifty()))
 
@@ -110,7 +114,8 @@ class Store:
     def news_reading(self):
         """(every announcement read as good or bad, what usually followed each kind)."""
         def build():
-            table = newsview.read_all(self.news(), self.deals(), self.quarterly())
+            table = newsview.read_all(self.news(), self.deals(), self.quarterly(),
+                                      read_pdfs="saved")
             reactions = newsview.past_reactions(table, self.model().prepared["last_close"],
                                                 self.nifty()["Close"])
             return table, reactions

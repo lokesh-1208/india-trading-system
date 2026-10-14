@@ -32,6 +32,13 @@ import config
 # (category or None for any, words to look for, lean, label). The first match wins.
 # Lean: +2 clearly good, +1 good, 0 neutral, -1 bad, -2 clearly bad.
 RULES = [
+    # These two are only found in the filing PDF, which is opened for serious labels:
+    # a bank telling RBI that a BORROWER's account is a fraud is routine for banks,
+    # and a supplier's insolvency claim is a dispute, not the company going bust.
+    ("Legal and regulatory", r"declared as fraud|classified as fraud|reported to rbi|"
+                             r"borrower account", 0, "Bank reported a borrower's fraud (routine)"),
+    ("Legal and regulatory", r"operational creditor", -1,
+     "Insolvency claim by a supplier (a dispute)"),
     ("Legal and regulatory", r"fraud|default|arrest|insolvency|cirp|nclt|winding up|"
                              r"search|seizure|raid|forensic", -2, "Fraud, default or insolvency"),
     ("Legal and regulatory", r"penalt|fine\b|show cause|tax demand|demand order|"
@@ -135,11 +142,11 @@ def results_lean(symbol, when, quarterly):
 
 
 # ------------------------------------------------------------- the PDF ------
-def pdf_text(link, browser=None, folder=None, pages=2):
+def pdf_text(link, browser=None, folder=None, pages=2, download=True):
     """Text of the first pages of a filing PDF, saved so it is read only once.
 
     Returns "" when the PDF cannot be downloaded or read (pypdf missing, scanned
-    image, network problem).
+    image, network problem), or when download is False and it was not saved before.
     """
     if not link or not str(link).lower().endswith(".pdf"):
         return ""
@@ -147,6 +154,8 @@ def pdf_text(link, browser=None, folder=None, pages=2):
     saved = folder / (hashlib.md5(str(link).encode()).hexdigest() + ".txt")
     if saved.exists():
         return saved.read_text(encoding="utf-8")
+    if not download:
+        return ""
     try:
         from pypdf import PdfReader
         logging.getLogger("pypdf").setLevel(logging.ERROR)     # damaged PDFs are common
@@ -168,6 +177,36 @@ def pdf_text(link, browser=None, folder=None, pages=2):
 
 # Only these kinds are worth opening the PDF for: the title rarely says which way it went.
 READ_PDF_FOR = {"Credit rating", "Legal and regulatory", "Management change"}
+# The PDF is also opened for the most serious label, which titles often overstate.
+CHECK_PDF_LABELS = {"Fraud, default or insolvency"}
+
+
+def needs_pdf(category, text):
+    """Is the filing PDF worth opening for this announcement?"""
+    if category not in READ_PDF_FOR:
+        return False
+    lean, label = read(category, text)
+    return lean == 0 or label in CHECK_PDF_LABELS
+
+
+def fetch_pdfs(news_table, days=10, browser=None, limit=60):
+    """Save the PDFs of recent announcements whose title is unclear or overstated.
+
+    Run by the updates, so the pages can read the saved text without waiting for
+    downloads. Returns how many were read.
+    """
+    if news_table is None or len(news_table) == 0:
+        return 0
+    since = news_table["time"].max() - pd.Timedelta(days=days)
+    recent = news_table[news_table["time"] >= since].sort_values("time", ascending=False)
+    count = 0
+    for row in recent.itertuples():
+        if count >= limit:
+            break
+        if needs_pdf(row.category, f"{row.subject} {row.detail}"):
+            if pdf_text(row.link, browser):
+                count += 1
+    return count
 
 
 # ------------------------------------------------------------ all news -------
@@ -197,8 +236,10 @@ def read_all(news_table, deals=None, quarterly=None, since=None, read_pdfs=False
                     else "Results declared"
             else:
                 lean, label = read(row.category, text)
-                if read_pdfs and row.category in READ_PDF_FOR and lean == 0:
-                    extra = pdf_text(row.link, browser)
+                if read_pdfs and row.category in READ_PDF_FOR and (
+                        lean == 0 or label in CHECK_PDF_LABELS):
+                    # read_pdfs="saved": only PDFs an update already saved (no waiting)
+                    extra = pdf_text(row.link, browser, download=read_pdfs != "saved")
                     if extra:
                         lean, label = read(row.category, text + " " + extra)
                 group = label
@@ -383,6 +424,11 @@ def ideas(read_table, ranking, in_trend, closes, trend_line, held=(), weekly=(),
         if main["rule_lean"] != 0 and (main["rule_lean"] > 0) != (main["lean"] > 0):
             row["history"] = ("Usually read as " + ("good" if main["rule_lean"] > 0 else "bad")
                               + " news, but the past says otherwise. " + row["history"])
+        elif main["rule_lean"] == 0 and main["lean"] != 0:
+            # Looks neutral (for example profit up only a little), but the past disagrees.
+            row["history"] = ("Looks neutral, but in the past this kind of news was usually "
+                              "followed by a " + ("rise" if main["lean"] > 0 else "fall")
+                              + ". " + row["history"])
         if net > 0:
             if view == "weak":
                 continue

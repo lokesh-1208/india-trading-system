@@ -16,7 +16,11 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}.NS?interval=1m&range=1d"
+# Daily bars for the last few days: the previous close is read from them, because
+# Yahoo's own "previous close" for indices can be a day older than it should be.
+URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=5d"
+# The top bar's indices: name shown -> Yahoo ticker
+INDICES = {"Nifty 50": "^NSEI", "India VIX": "^INDIAVIX", "USD/INR": "INR=X", "Brent": "BZ=F"}
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 CACHE_SECONDS = 30
 MAX_SYMBOLS = 40
@@ -38,32 +42,65 @@ def market_open(now=None):
 def parse(answer):
     """One stock's price row from Yahoo's chart answer, or None."""
     try:
-        meta = answer["chart"]["result"][0]["meta"]
+        result = answer["chart"]["result"][0]
+        meta = result["meta"]
     except (KeyError, IndexError, TypeError):
         return None
     price = meta.get("regularMarketPrice")
-    previous = meta.get("chartPreviousClose") or meta.get("previousClose")
     if not price:
         return None
     stamp = meta.get("regularMarketTime")
+    previous = _previous_close(result, stamp) or meta.get("chartPreviousClose") \
+        or meta.get("previousClose")
     when = datetime.fromtimestamp(stamp, INDIA).isoformat(timespec="seconds") if stamp else None
     change = round((price / previous - 1) * 100, 2) if previous else None
+    previous = round(float(previous), 2) if previous else None
     return {"price": round(float(price), 2), "previous_close": previous,
             "change_%": change, "time": when}
 
 
-def _one(client, symbol):
+def _previous_close(result, stamp):
+    """The last daily close before the day of the latest price, from the daily bars."""
     try:
-        answer = client.get(URL.format(symbol=symbol.replace("&", "%26")), timeout=8)
+        times = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if not stamp:
+        return None
+    today = datetime.fromtimestamp(stamp, INDIA).date()
+    before = [close for when, close in zip(times, closes)
+              if close and datetime.fromtimestamp(when, INDIA).date() < today]
+    return before[-1] if before else None
+
+
+def _one(client, ticker):
+    try:
+        safe = ticker.replace("&", "%26").replace("^", "%5E").replace("=", "%3D")
+        answer = client.get(URL.format(ticker=safe), timeout=8)
         answer.raise_for_status()
-        return symbol, parse(answer.json())
+        return ticker, parse(answer.json())
     except Exception:
-        return symbol, None
+        return ticker, None
 
 
 def prices(symbols, fetch=None):
-    """{symbol: price row} for the symbols that answered. fetch replaces the download in tests."""
+    """{symbol: price row} for NSE stocks that answered. fetch replaces the download in tests."""
     wanted = list(dict.fromkeys(s.strip().upper() for s in symbols if s and s.strip()))[:MAX_SYMBOLS]
+    found = quotes([f"{symbol}.NS" for symbol in wanted],
+                   fetch=None if fetch is None else (lambda ticker: fetch(ticker[:-3])))
+    return {ticker[:-3]: row for ticker, row in found.items()}
+
+
+def indices(fetch=None):
+    """{name: price row} for the top bar's indices."""
+    found = quotes(list(INDICES.values()), fetch=fetch)
+    return {name: found[ticker] for name, ticker in INDICES.items() if ticker in found}
+
+
+def quotes(tickers, fetch=None):
+    """{Yahoo ticker: price row} for the tickers that answered, kept for CACHE_SECONDS."""
+    wanted = list(dict.fromkeys(tickers))
     now = time.time()
     found, missing = {}, []
     with _lock:

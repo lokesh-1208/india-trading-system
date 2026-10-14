@@ -101,3 +101,15 @@ def test_list_summary_says_why_the_buy_section_is_short():
     assert views.list_summary(table, 3, False).endswith("nothing is bought today.")
     assert views.list_summary(pd.DataFrame({"status": ["Missed"]}), 3, True).endswith(
         "None of them can be bought today.")
+
+
+def test_missing_flow_days_lists_trading_days_the_update_missed():
+    days = pd.to_datetime(["2026-10-08", "2026-10-09", "2026-10-12", "2026-10-13"])
+    missed = views.missing_flow_days(["2026-10-09", "2026-10-13"], days)
+    assert missed == [pd.Timestamp("2026-10-12")]       # 8 Oct is before the first saved day
+    assert views.missing_flow_days([], days) == []
+
+
+def test_next_list_is_the_coming_monday():
+    assert views.next_list_day("2026-10-12") == pd.Timestamp("2026-10-19")
+    assert views.next_list_day("2026-10-16") == pd.Timestamp("2026-10-19")

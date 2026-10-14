@@ -213,3 +213,25 @@ td.right, th.right { text-align: right; }
   .strip { margin-left: 0; }
   h1 { font-size: 24px; }
 }
+
+/* One-panel top of the Today page (no empty gap under the plan) */
+.hero-one { display: flex; flex-wrap: wrap; gap: 16px 32px; align-items: flex-start; margin-bottom: 20px; }
+.hero-one .left { flex: 999 1 460px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.hero-one .right { flex: 1 1 260px; display: flex; flex-direction: column; gap: 10px; }
+.warn-text { color: var(--warn); }
+
+/* Market page sections */
+.subnav { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.subnav a { min-height: 32px; display: inline-flex; align-items: center; padding: 0 14px; border-radius: 8px;
+  border: 1px solid var(--line); color: var(--muted); font-size: 13px; text-decoration: none; }
+.subnav a.active { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
+
+/* The week's list, folded by default */
+details.week > summary { cursor: pointer; padding: 12px 14px; list-style: none; }
+details.week > summary::-webkit-details-marker { display: none; }
+details.week > summary::before { content: "▸"; display: inline-block; width: 16px; color: var(--muted); }
+details.week[open] > summary::before { content: "▾"; }
+
+/* Live marker in the top bar */
+.live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--up);
+  margin-left: 6px; vertical-align: middle; }

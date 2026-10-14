@@ -13,7 +13,11 @@ test.describe("Today page", () => {
       await expect(page.getByRole("link", { name: `${item.symbol}: ${item.tag}` })).toBeVisible();
     }
     await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toBeVisible();
-    await expect(page.getByRole("table").first()).toContainText("Missed");
+    await page.getByText("This week's list", { exact: true }).click();
+    await expect(page.locator("#week table")).toContainText("Missed");
+    await expect(page.getByTestId("next-list")).toContainText("Fri, 9 Oct");
+    await expect(page.getByTestId("market-checks")).toContainText("1 more not known yet");
+    await expect(page.getByTestId("missed-days")).toContainText("Mon, 12 Oct");
   });
 
   test("live prices show where each stock is now against its limit", async ({ page }) => {
@@ -25,7 +29,8 @@ test.describe("Today page", () => {
     await expect(chennpetro).toContainText("do not chase");
     await expect(page.getByRole("link", { name: "KOTAKBANK: Buy" })).toContainText("In range now");
     await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toContainText("live ₹106.00");
-    await expect(page.getByRole("table").first()).toContainText("back in range");
+    await page.getByText("This week's list", { exact: true }).click();
+    await expect(page.locator("#week table")).toContainText("back in range");
   });
 
   test("buy card opens the stock page", async ({ page }) => {
@@ -37,13 +42,25 @@ test.describe("Today page", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("CHENNPETRO");
   });
 
-  test("context cards are labelled for context, never as buy signals", async ({ page }) => {
+  test("Today keeps only what you act on; context lives on the Market page", async ({ page }) => {
     await mockApi(page);
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Before the open" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "News ideas" })).toBeVisible();
-    await expect(page.getByText("for context").first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Market mood" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "News ideas" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: /Avoid/ })).toHaveCount(0);
     await expect(page.getByText("not tested")).toHaveCount(0);
+  });
+
+  test("the top bar has three places and live index values", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/");
+    const nav = page.getByRole("navigation", { name: "Pages" });
+    await expect(nav.getByRole("link")).toHaveText(["Today", "Market", "Stocks & trades"]);
+    await expect(page.locator(".strip")).toContainText("22,626.55");
+    await nav.getByRole("link", { name: "Market" }).click();
+    await expect(page).toHaveURL(/\/market$/);
+    await page.getByRole("navigation", { name: "Market sections" }).getByRole("link", { name: "News ideas" }).click();
+    await expect(page.getByText(/Tested on one year/)).toBeVisible();
   });
 
   test("Update data starts the update and shows its progress", async ({ page }) => {
@@ -71,5 +88,16 @@ test.describe("Today page", () => {
     await page.goto("/");
     await expect(page.getByRole("alert")).toContainText("KeyError: boom");
     await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+});
+
+
+test.describe("Before 9:15 am", () => {
+  test.use({ timezoneId: "Asia/Kolkata" });
+  test("the Today page shows the before-the-open card", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-10-14T08:45:00+05:30"));
+    await mockApi(page);
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Before the open" })).toBeVisible();
   });
 });

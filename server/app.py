@@ -55,6 +55,12 @@ def today(money: float | None = None):
     return views.today_page(money)
 
 
+@app.get("/api/live")
+def live(symbols: str = ""):
+    """Live prices for a few stocks (comma separated), for the Today page."""
+    return views.live_prices(symbols.split(","))
+
+
 @app.get("/api/before-open")
 def before_open():
     return views.before_open()

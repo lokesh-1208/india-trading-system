@@ -69,7 +69,8 @@ def market_strip():
 
 
 def status():
-    nifty = STORE.nifty()
+    # The last day with stock closes: the morning refresh can add today's unfinished Nifty.
+    nifty = model.up_to_last_close(STORE.nifty(), STORE.stocks())
     now = india_now()
     last = nifty.index[-1]
     fresh, text = today.data_status(last, now)
@@ -100,6 +101,30 @@ def _ladder(stop, signal, limit, last):
     low, high = stop * 0.98, limit * 1.02
     return {"stop": stop, "signal": signal, "limit": limit, "last": last,
             "low": low, "high": high}
+
+
+def list_summary(status_table, places, market_ok):
+    """One plain sentence: why the Buy section shows as many stocks as it does."""
+    if len(status_table) == 0:
+        return "There is no list for this week yet."
+    counts = status_table["status"].value_counts()
+    can_buy = int(counts.get("Buy", 0))
+    parts = []
+    for status, words in [("You hold", "you already hold {}"),
+                          ("Missed", "{} ran more than 2% above their list price (the model does not chase)"),
+                          ("Trend broke", "{} closed below the 20-day average"),
+                          ("Results soon", "{} have results due within 5 days"),
+                          ("Too costly", "{} cost more per share than the money per stock")]:
+        if counts.get(status, 0):
+            parts.append(words.format(int(counts[status])))
+    text = f"This week's list has {len(status_table)} stocks"
+    text += (": " + "; ".join(parts) + ". ") if parts else ". "
+    if not market_ok:
+        return text + "The market is weak, so nothing is bought today."
+    if can_buy == 0:
+        return text + "None of them can be bought today."
+    room = f"room for {places} new stock{'s' if places != 1 else ''}"
+    return text + f"{can_buy} can be bought today, with {room}."
 
 
 def today_page(money=None):
@@ -162,6 +187,8 @@ def today_page(money=None):
                            "Results soon": "results due within 5 days"}.get(row.status, "")
             skips.append(item)
 
+    explain = list_summary(status_table, places, bool(plan["market_ok"]))
+
     # ---- your stocks ----
     trend = STORE.trend_line()
     positions = journal.open_positions(trades, prices, last_day)
@@ -199,7 +226,7 @@ def today_page(money=None):
     return clean({
         "list_day": list_day, "signal_day": last_day, "week_of": weekly["list_day"].iloc[0]
         if len(weekly) else list_day,
-        "headline": headline, "nothing_to_sell": not sells,
+        "headline": headline, "nothing_to_sell": not sells, "explain": explain,
         "market": {"level": plan["market_level"], "note": plan["market_note"],
                    "ok": bool(plan["market_ok"]), "share": share, "per_stock": per_stock,
                    "money": money, "positions": rules["positions"],
@@ -214,6 +241,15 @@ def today_page(money=None):
         "results_due": [{"symbol": symbol, "date": date} for symbol, date in sorted(due.items())
                         if symbol in set(ranking.index[:20])],
     })
+
+
+# ---------------------------------------------------------------- live ----
+def live_prices(symbols):
+    """Live prices for the Today page. The model's decisions do not use them."""
+    from trading import live
+    now = india_now()
+    return clean({"time": now, "market_open": live.market_open(now),
+                  "prices": live.prices(symbols)})
 
 
 # ------------------------------------------------------------ before open --

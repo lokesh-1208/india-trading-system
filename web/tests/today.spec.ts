@@ -8,11 +8,24 @@ test.describe("Today page", () => {
     const today = fixture("today");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(today.headline);
     await expect(page.getByText("Market: caution")).toBeVisible();
+    await expect(page.getByTestId("list-explain")).toHaveText(today.explain);
     for (const item of today.buys) {
       await expect(page.getByRole("link", { name: `${item.symbol}: ${item.tag}` })).toBeVisible();
     }
     await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toBeVisible();
     await expect(page.getByRole("table").first()).toContainText("Missed");
+  });
+
+  test("live prices show where each stock is now against its limit", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/");
+    await expect(page.getByTestId("live-status")).toContainText("Live prices, updated every minute");
+    const chennpetro = page.getByRole("link", { name: "CHENNPETRO: Buy" });
+    await expect(chennpetro).toContainText("Above limit now");
+    await expect(chennpetro).toContainText("do not chase");
+    await expect(page.getByRole("link", { name: "KOTAKBANK: Buy" })).toContainText("In range now");
+    await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toContainText("live ₹106.00");
+    await expect(page.getByRole("table").first()).toContainText("back in range");
   });
 
   test("buy card opens the stock page", async ({ page }) => {

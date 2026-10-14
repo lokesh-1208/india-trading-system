@@ -154,12 +154,15 @@ def weekly_status(weekly, last_close, in_trend, results_due, held, places, max_g
                   budget=None):
     """What to do with each stock on the weekly list today.
 
-    The first `places` stocks not already held are the picks, the rest backups.
+    The first `places` buyable stocks (status "Buy") not already held are the
+    picks, the other buyable ones backups. A stock that cannot be bought today
+    (missed, trend broke, results soon, too costly) does not use up a pick: the
+    backtest skips such a stock and moves on to the next one on the list.
     Limits stay at the weekly list's close + max_gap all week.
     status: "Buy" (in range), "Missed" (above the limit), "Trend broke" (closed
     below its 20-day EMA), "Results soon" (results within the block window), "You hold",
-    "Too costly" (one share costs more than `budget`, the money per stock; the
-    backtest skipped such stocks too, and they do not use up a pick).
+    "Too costly" (one share costs more than `budget`, the money per stock).
+    kind: "Pick", "Backup", "Held" or "Skipped".
     """
     rows = []
     picks_left = places
@@ -170,17 +173,16 @@ def weekly_status(weekly, last_close, in_trend, results_due, held, places, max_g
             status, kind = "You hold", "Held"
         elif budget is not None and budget < limit:
             status, kind = "Too costly", "Skipped"
+        elif row.symbol in results_due:
+            status, kind = "Results soon", "Skipped"
+        elif not bool(in_trend.get(row.symbol, True)):
+            status, kind = "Trend broke", "Skipped"
+        elif last == last and last > limit:
+            status, kind = "Missed", "Skipped"
         else:
+            status = "Buy"
             kind = "Pick" if picks_left > 0 else "Backup"
             picks_left -= 1 if kind == "Pick" else 0
-            if row.symbol in results_due:
-                status = "Results soon"
-            elif not bool(in_trend.get(row.symbol, True)):
-                status = "Trend broke"
-            elif last == last and last > limit:
-                status = "Missed"
-            else:
-                status = "Buy"
         rows.append({"symbol": row.symbol, "rank": row.rank, "score": row.score,
                      "close": row.close, "limit": round(limit, 2), "last": round(last, 2),
                      "kind": kind, "status": status})

@@ -39,6 +39,8 @@ export function useApi<T>(path: string | null, version = 0) {
 }
 
 // ---- shapes of the answers ----
+export type LivePrice = { price: number; previous_close: number | null; "change_%": number | null; time: string | null };
+export type Live = { time: string; market_open: boolean; prices: Record<string, LivePrice> };
 export type Ladder = { stop: number; signal: number; limit: number; last: number; low: number; high: number };
 export type BuyItem = {
   symbol: string; rank: number; score: number; about: string; ladder: Ladder; shares: number;
@@ -52,6 +54,7 @@ export type Holding = {
 };
 export type Today = {
   list_day: string; signal_day: string; week_of: string; headline: string; nothing_to_sell: boolean;
+  explain: string;
   market: {
     level: string; note: string; ok: boolean; share: number; per_stock: number; money: number;
     positions: number; checks_pass: number; checks_total: number; stop_loss: number; max_gap: number;

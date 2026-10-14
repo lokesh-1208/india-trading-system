@@ -88,9 +88,19 @@ def test_weekly_status_marks_picks_backups_and_what_to_do():
     trend = {"CCC": False}
     table = picks.weekly_status(_weekly(), last, trend, {"DDD"}, {"EEE"}, 3, 0.02)
     by = table.set_index("symbol")
-    assert list(by["kind"]) == ["Pick", "Pick", "Pick", "Backup", "Held"]
+    assert list(by["kind"]) == ["Pick", "Skipped", "Skipped", "Skipped", "Held"]
     assert list(by["status"]) == ["Buy", "Missed", "Trend broke", "Results soon", "You hold"]
     assert by.loc["AAA", "limit"] == 102.0
+
+
+def test_stocks_that_cannot_be_bought_do_not_use_up_a_pick():
+    # 14 Oct 2026: five of the first picks had run past their limits, so the
+    # stocks further down that were still in range must become the picks.
+    last = {"AAA": 110.0, "BBB": 110.0, "CCC": 100.0, "DDD": 101.0, "EEE": 99.0}
+    table = picks.weekly_status(_weekly(), last, {}, set(), set(), 2, 0.02)
+    by = table.set_index("symbol")
+    assert list(by["status"]) == ["Missed", "Missed", "Buy", "Buy", "Buy"]
+    assert list(by["kind"]) == ["Skipped", "Skipped", "Pick", "Pick", "Backup"]
 
 
 def test_weekly_list_is_the_first_list_of_the_week(tmp_path):

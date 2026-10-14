@@ -1,7 +1,7 @@
 // Today: what to buy, what to hold or sell, and what to skip. The one page to act from.
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { BeforeOpen, Holding, Movers, NewsIdeas, Today, useApi } from "../api";
+import { BeforeOpen, getJson, Holding, Live, LivePrice, Movers, NewsIdeas, Today, useApi } from "../api";
 import { useApp } from "../App";
 import { Empty, Ladder, Loading, Panel, Problem, Section, Tag } from "../components/ui";
 import { day, dateTime, pct, price, rupees, signedRupees } from "../format";
@@ -10,7 +10,64 @@ function savedMoney() {
   try { return Number(localStorage.getItem("kasauti-money")) || 100000; } catch { return 100000; }
 }
 
-function HoldCard({ row }: { row: Holding }) {
+const LIVE_EVERY_MS = 60_000;
+
+// Live prices for the stocks on the page, asked again every minute while the page is open.
+// They only show where a stock is now; the buy, hold and sell decisions come from the close.
+function useLive(symbols: string[]) {
+  const key = symbols.join(",");
+  const [live, setLive] = useState<Live | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!key) return;
+    let stopped = false;
+    const ask = () => {
+      if (document.visibilityState === "hidden") return;
+      getJson<Live>(`/api/live?symbols=${encodeURIComponent(key)}`)
+        .then((found) => { if (!stopped) { setLive(found); setFailed(false); } })
+        .catch(() => { if (!stopped) setFailed(true); });
+    };
+    ask();
+    const timer = window.setInterval(ask, LIVE_EVERY_MS);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [key]);
+  return { live, failed };
+}
+
+function clock(value: string | null | undefined) {
+  if (!value) return "";
+  const time = value.slice(11, 16);
+  return time ? time : "";
+}
+
+function LiveNote({ quote }: { quote?: LivePrice }) {
+  if (!quote) return null;
+  const change = quote["change_%"];
+  return (
+    <span className="small num" data-testid="live-price">
+      <span className="muted">live</span> ₹{price(quote.price)}{" "}
+      {change !== null ? <span className={change >= 0 ? "up" : "down"}>{pct(change, 1)}</span> : null}
+      {quote.time ? <span className="muted"> · {clock(quote.time)}</span> : null}
+    </span>
+  );
+}
+
+// Trading days from the buy day to today, counting both (weekends skipped, holidays not known).
+function holdingDay(bought: string, today = new Date()) {
+  const day = new Date(`${bought.slice(0, 10)}T00:00:00`);
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  let count = 0;
+  while (day <= end) {
+    if (day.getDay() !== 0 && day.getDay() !== 6) count += 1;
+    day.setDate(day.getDate() + 1);
+  }
+  return Math.max(count, 1);
+}
+
+function HoldCard({ row, quote }: { row: Holding; quote?: LivePrice }) {
+  const now = quote?.price ?? row.last_price;
+  const gainPct = quote ? (quote.price / row.buy_price - 1) * 100 : row["gain_%"];
+  const gainRs = quote ? (quote.price - row.buy_price) * row.quantity : row.gain_rs;
   const tone = row.action === "SELL" ? "down" : row.action === "WAIT" ? "plain" : "up";
   const label = row.action === "SELL" ? "Sell" : row.action === "WAIT" ? "Bought today" : "Hold";
   return (
@@ -27,13 +84,15 @@ function HoldCard({ row }: { row: Holding }) {
         <span className={`num ${row.exit_pct > 0 ? "up" : "down"}`}>{pct(row.exit_pct)} ({signedRupees(row.exit_rs)})</span>
       </div>
       <div className="end">
-        <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>₹{price(row.last_price)}</span>
-        {row.action === "WAIT" ? <span className="small muted">checked after today's close</span> : (
-          <span className={`num ${(row["gain_%"] ?? 0) >= 0 ? "up" : "down"}`} style={{ fontSize: 13 }}>
-            {pct(row["gain_%"])}  {signedRupees(row.gain_rs)}
+        <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>
+          {quote ? <span className="small muted" style={{ fontWeight: 400 }}>live </span> : null}₹{price(now)}
+        </span>
+        {row.action === "WAIT" && !quote ? <span className="small muted">checked after today's close</span> : (
+          <span className={`num ${(gainPct ?? 0) >= 0 ? "up" : "down"}`} style={{ fontSize: 13 }}>
+            {pct(gainPct)}  {signedRupees(gainRs)}
           </span>
         )}
-        <span className="small muted">day {row.days_held} of holding</span>
+        <span className="small muted">day {holdingDay(row.bought)} of holding</span>
       </div>
     </Link>
   );
@@ -116,6 +175,10 @@ export default function TodayPage() {
   const { version, status, startJob, job } = useApp();
   const [money, setMoney] = useState(savedMoney);
   const { data, error, reload } = useApi<Today>(`/api/today?money=${money}`, version);
+  const symbols = useMemo(() => data
+    ? [...data.buys, ...data.skips, ...data.holds].map((item) => item.symbol).sort() : [], [data]);
+  const { live, failed: liveFailed } = useLive(symbols);
+  const quote = (symbol: string) => live?.prices[symbol];
 
   const changeMoney = (value: number) => {
     setMoney(value);
@@ -172,25 +235,41 @@ export default function TodayPage() {
         <div className="main-col">
           <Section title="Buy from this week's list" id="buy"
             aside={`List made from the ${day(data.week_of)} close. Place an AMO limit order at the limit.`}>
+            {data.explain ? <p className="small muted" data-testid="list-explain" style={{ marginTop: 0 }}>{data.explain}</p> : null}
+            <p className="small muted" data-testid="live-status" style={{ marginTop: 0 }}>
+              {liveFailed && !live ? "Live prices could not be fetched; showing the last close."
+                : !live ? "Getting live prices…"
+                  : live.market_open ? `Live prices, updated every minute (last at ${clock(live.time)}). The model still decides from the close.`
+                    : "Market is closed: prices shown are the last traded ones."}
+            </p>
             {!market.ok ? <Empty>The market is weak, so the model buys nothing today.</Empty>
               : data.buys.length === 0 ? <Empty>Nothing on this week's list is buyable today.</Empty>
-                : data.buys.map((item) => (
-                  <Link key={item.symbol} to={`/stocks/${item.symbol}`} className="card"
-                    aria-label={`${item.symbol}: ${item.tag}`}>
-                    <div className="who">
-                      <div className="line1">
-                        <span className="symbol">{item.symbol}</span>
-                        <Tag tone={item.tag === "Buy" ? "blue" : "plain"}>{item.tag}</Tag>
+                : data.buys.map((item) => {
+                  const now = quote(item.symbol);
+                  const above = now !== undefined && now.price > item.ladder.limit;
+                  return (
+                    <Link key={item.symbol} to={`/stocks/${item.symbol}`} className="card"
+                      aria-label={`${item.symbol}: ${item.tag}`}>
+                      <div className="who">
+                        <div className="line1">
+                          <span className="symbol">{item.symbol}</span>
+                          <Tag tone={item.tag === "Buy" ? "blue" : "plain"}>{item.tag}</Tag>
+                          {now ? <Tag tone={above ? "warn" : "up"}>{above ? "Above limit now" : "In range now"}</Tag> : null}
+                        </div>
+                        <span className="small muted">{item.about}</span>
+                        {above ? <span className="small down">Live price is above the limit ₹{price(item.ladder.limit)}: do not chase. A limit order fills only if it comes back.</span> : null}
                       </div>
-                      <span className="small muted">{item.about}</span>
-                    </div>
-                    <div className="mid"><Ladder ladder={item.ladder} /></div>
-                    <div className="end">
-                      <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>{item.shares} shares</span>
-                      <span className="small muted">about {rupees(item.amount)}</span>
-                    </div>
-                  </Link>
-                ))}
+                      <div className="mid">
+                        <Ladder ladder={now ? { ...item.ladder, last: now.price } : item.ladder} lastLabel={now ? "live" : "last"} />
+                      </div>
+                      <div className="end">
+                        <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>{item.shares} shares</span>
+                        <span className="small muted">about {rupees(item.amount)}</span>
+                        <LiveNote quote={now} />
+                      </div>
+                    </Link>
+                  );
+                })}
             {data.results_due.length ? (
               <p className="small muted">Left out because results are due within 5 days:{" "}
                 {data.results_due.map((item) => `${item.symbol} (${day(item.date)})`).join(", ")}.</p>
@@ -201,20 +280,25 @@ export default function TodayPage() {
             aside={data.holds.length ? `Stop-loss ${Math.round(market.stop_loss * 100)}% under your buy price` : undefined}>
             {data.holds.length === 0 ? (
               <Empty>After you buy, record it under <Link to="/trades">Trades</Link> and it shows here, marked Hold or Sell each day.</Empty>
-            ) : data.holds.map((row) => <HoldCard key={row.symbol} row={row} />)}
+            ) : data.holds.map((row) => <HoldCard key={row.symbol} row={row} quote={quote(row.symbol)} />)}
           </Section>
 
           {data.skips.length ? (
             <Section title={<>Not buyable now <span className="muted" style={{ fontWeight: 400 }}>· rest of this week's list</span></>} id="skip">
               <div className="panel tight table-wrap">
                 <table>
-                  <thead><tr><th>Stock</th><th>Status</th><th>Why</th></tr></thead>
+                  <thead><tr><th>Stock</th><th>Status</th><th>Why</th><th className="right">Live</th></tr></thead>
                   <tbody>
                     {data.skips.map((item) => (
                       <tr key={item.symbol}>
                         <td><Link to={`/stocks/${item.symbol}`} style={{ color: "var(--text)", fontWeight: 600 }}>{item.symbol}</Link></td>
                         <td><span className={`small ${item.status === "Missed" ? "muted" : "down"}`} style={{ fontWeight: 600 }}>{item.status}</span></td>
                         <td className="small muted num">{item.why}</td>
+                        <td className="right">
+                          <LiveNote quote={quote(item.symbol)} />
+                          {item.status === "Missed" && quote(item.symbol) && quote(item.symbol)!.price <= item.ladder.limit
+                            ? <div className="small up" style={{ fontWeight: 600 }}>back in range</div> : null}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

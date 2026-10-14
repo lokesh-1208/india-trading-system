@@ -58,7 +58,7 @@ export type WeekRow = {
 };
 export type Holding = {
   symbol: string; action: "HOLD" | "SELL" | "WAIT"; reason: string; quantity: number; buy_price: number; weakest?: boolean;
-  size_vs_plan?: number | null;
+  size_vs_plan?: number | null; peak?: number | null; trail_from?: number | null; trail_active?: boolean;
   last_price: number; "gain_%": number | null; gain_rs: number | null; stop_loss: number;
   trend_line: number | null; bought: string; days_held: number; exit_line: number; exit_pct: number;
   exit_rs: number; gtt: number;

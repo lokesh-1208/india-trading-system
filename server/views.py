@@ -122,7 +122,8 @@ def _plan():
     open_rows = journal.open_positions(trades)
     held = list(open_rows["symbol"].unique())
     paid = dict(open_rows.groupby("symbol")["buy_price"].mean()) if len(open_rows) else {}
-    plan = built.decision(held, style=config.MODEL_STYLE, buy_prices=paid)
+    bought = dict(open_rows.groupby("symbol")["buy_date"].min()) if len(open_rows) else {}
+    plan = built.decision(held, style=config.MODEL_STYLE, buy_prices=paid, buy_dates=bought)
     return built, trades, held, plan
 
 

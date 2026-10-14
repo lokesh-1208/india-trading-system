@@ -51,6 +51,12 @@ function HoldCard({ row, quote }: { row: Holding; quote?: LivePrice }) {
       <div className="mid facts">
         <span className="muted">Sell if it closes below</span><span className="num">₹{price(row.exit_line)}</span>
         <span className="muted">GTT stop-loss in Kite</span><span className="num">₹{price(row.gtt)}</span>
+        {row.trail_from ? (
+          <>
+            <span className="muted">{row.trail_active ? "Profit trail on: high" : "Profit trail starts at"}</span>
+            <span className={`num ${row.trail_active ? "up" : ""}`}>₹{price(row.trail_active ? row.peak : row.trail_from)}</span>
+          </>
+        ) : null}
         <span className="muted">{row.exit_pct > 0 ? "Profit locked in" : "If it exits there"}</span>
         <span className={`num ${row.exit_pct > 0 ? "up" : "down"}`}>{pct(row.exit_pct)} ({signedRupees(row.exit_rs)})</span>
       </div>

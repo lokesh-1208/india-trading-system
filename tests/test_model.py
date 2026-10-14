@@ -10,6 +10,12 @@ from trading import model
 DAYS = pd.bdate_range("2024-06-03", "2025-12-31")
 
 
+@pytest.fixture(autouse=True)
+def no_breadth_check(monkeypatch):
+    """Three test stocks make a poor breadth reading; the breadth check has its own test."""
+    monkeypatch.setattr(config, "MODEL_BREADTH_MIN", None)
+
+
 def _stock(start, daily_growth):
     close = start * (1 + daily_growth) ** np.arange(len(DAYS))
     return pd.DataFrame({"Open": close, "High": close, "Low": close, "Close": close,
@@ -235,3 +241,33 @@ def test_nifty_is_cut_at_the_last_day_with_stock_closes():
     cut = model.up_to_last_close(nifty, stocks)
     assert list(cut.index) == list(days[:2])
     assert model.up_to_last_close(nifty, {}) is nifty
+
+
+def test_breadth_check_joins_the_market_checks(monkeypatch):
+    monkeypatch.setattr(config, "MODEL_BREADTH_MIN", 0.5)
+    built = _model()
+    name = [c for c in built.checks.columns if "of stocks above" in c]
+    assert len(name) == 1
+    # GOOD rises, POOR falls, MID is flat: one of three above its EMA, so the check fails
+    assert built.checks[name[0]].iloc[-1] == 0.0
+    assert abs(built.breadth.iloc[-1] - 1 / 3) < 1e-9
+
+
+def test_profit_trail_sells_after_a_fall_from_the_high(monkeypatch):
+    monkeypatch.setitem(config.MODEL_STYLES, "swing",
+                        {"check": "week", "positions": 2, "keep_rank": 3, "stop_loss": 0.08,
+                         "profit_trail": {"trigger": 0.15, "trail": 0.10}})
+    built = _model()
+    close = built.prepared["last_close"]["GOOD"]
+    last, bought = float(close.iloc[-1]), close.index[-120]
+    # Bought 120 days ago at a price well below the high: up 15%+, but not 10% off the high.
+    paid = float(close.iloc[-120])
+    plan = built.decision(["GOOD"], style="swing", buy_prices={"GOOD": paid},
+                          buy_dates={"GOOD": bought})
+    assert plan["trailed"] == [] and plan["peaks"]["GOOD"] == pytest.approx(last)
+    # Pretend the stock is now 12% below its high
+    built.prepared["last_close"].loc[close.index[-1], "GOOD"] = last * 0.88
+    plan = built.decision(["GOOD"], style="swing", buy_prices={"GOOD": paid},
+                          buy_dates={"GOOD": bought})
+    assert plan["trailed"] == ["GOOD"] and "GOOD" in plan["sell"]
+

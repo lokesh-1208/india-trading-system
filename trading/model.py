@@ -349,6 +349,23 @@ def _industry_scorecard(table, industry, financial):
     ]
 
 
+def latest_shares(annual, quarterly=None):
+    """Each company's most recent share count, {symbol: shares}.
+
+    Prices from Yahoo are adjusted for splits and bonus issues back to today, so the
+    share count that matches them on every past day is today's, not the count filed
+    at the time (that one is 10x off before a 1:10 split). New shares issued since
+    are the only error left, usually a few percent.
+    """
+    tables = [t[["symbol", "period_end", "shares"]] for t in (annual, quarterly)
+              if t is not None and len(t) and "shares" in t]
+    if not tables:
+        return pd.Series(dtype=float)
+    table = pd.concat(tables).dropna(subset=["shares"])
+    table = table[table["shares"] > 0].sort_values("period_end")
+    return table.groupby("symbol")["shares"].last()
+
+
 class Model:
     """Holds every table once, and scores all stocks on any day."""
 
@@ -362,6 +379,7 @@ class Model:
 
         get = tables.get
         self.annual = None if get("annual") is None else annual_factors(get("annual"))
+        self.latest_shares = latest_shares(get("annual"), get("quarterly"))
         self.quarterly = None if get("quarterly") is None else quarterly_factors(get("quarterly"))
         self.ownership = (None if get("holdings") is None
                           else ownership_factors(get("holdings"), get("fund_holders")))
@@ -378,17 +396,26 @@ class Model:
             self.news_read = read[["time", "symbol", "lean"]]
         self.pledges = get("pledges")
 
-        self.checks = market_checks(nifty, markets, get("fii_net"))
-        self.market_score = market_score(self.checks)
-        self.market_ok = (self.market_score >= config.MODEL_MARKET_MIN).fillna(False)
         # A stock is "in trend" while it closes above its short trend line (20-day EMA).
         close = self.prepared["last_close"]
         trend_line = indicators.ema(close, config.EMA_FAST)
         in_trend = (close > trend_line).fillna(False)
+        self.checks = market_checks(nifty, markets, get("fii_net"))
+        # Market breadth: share of liquid stocks above their 20-day EMA (optional check).
+        liquid = self.prepared["liquid"]
+        self.breadth = (in_trend & liquid).sum(axis=1) / liquid.sum(axis=1).replace(0, np.nan)
+        if config.MODEL_BREADTH_MIN:
+            self.checks[f"At least {config.MODEL_BREADTH_MIN:.0%} of stocks above their "
+                        f"{config.EMA_FAST}-day average"] = \
+                (self.breadth >= config.MODEL_BREADTH_MIN).astype(float).where(self.breadth.notna())
+        self.market_score = market_score(self.checks)
+        self.market_ok = (self.market_score >= config.MODEL_MARKET_MIN).fillna(False)
         # Entry quality: how far above the trend line, and how much it rose in 5 days.
         room = close / trend_line - 1
         spike = close / close.shift(config.SPIKE_DAYS) - 1
+        fast_line = indicators.ema(close, config.EMA_PROFIT_TRAIL)
         self.trading = {**self.prepared, "market_ok": self.market_ok, "in_trend": in_trend,
+                        "in_trend_fast": (close > fast_line).fillna(False),
                         "room": room, "spike": spike,
                         "cash_reason": "too few market checks passed"}
         self._cache = {}
@@ -429,7 +456,10 @@ class Model:
             newer = quarter["quarter_end"] >= year["period_end"]
             profit = quarter["profit_4_quarters"].where(
                 newer & quarter["profit_4_quarters"].notna(), profit)
-        shares = year["shares"] if "shares" in year else pd.Series(np.nan, index=symbols)
+        if config.MODEL_SHARES == "latest":
+            shares = self.latest_shares.reindex(symbols)
+        else:
+            shares = year["shares"] if "shares" in year else pd.Series(np.nan, index=symbols)
         equity = year["equity"] if "equity" in year else pd.Series(np.nan, index=symbols)
         earnings_per_share = (profit / shares).where(shares > 0)
         table["earnings_yield"] = earnings_per_share / close
@@ -558,9 +588,11 @@ class Model:
             max_gap=rules.get("max_gap"), limit_days=rules.get("limit_days"),
             max_drop=rules.get("max_drop"), min_room=rules.get("min_room"),
             max_spike=rules.get("max_spike"), midweek_fill=rules.get("midweek_fill", False),
-            budget_scale=rules.get("budget_scale"), exit_before=rules.get("exit_before"))
+            budget_scale=rules.get("budget_scale"), exit_before=rules.get("exit_before"),
+            industry=self.industry, max_per_industry=rules.get("max_per_industry"),
+            profit_trail=rules.get("profit_trail"))
 
-    def decision(self, held_symbols, style=None, buy_prices=None):
+    def decision(self, held_symbols, style=None, buy_prices=None, buy_dates=None):
         """What the model says to do now, given the stocks you really hold.
 
         buy_prices: {symbol: the price you paid}. With it, a holding that has
@@ -597,6 +629,24 @@ class Model:
             plan["sell"] = list(dict.fromkeys(plan["sell"] + plan["stopped"]))
             plan["keep"] = [s for s in plan["keep"] if s not in plan["stopped"]]
             plan["candidates"] = [s for s in plan["candidates"] if s not in plan["stopped"]]
+        # Profit trail: once a holding has closed `trigger` above the buy price, sell after a
+        # close `trail` below its highest close since the buy (backtest log, entry 10).
+        plan["trailed"], plan["peaks"] = [], {}
+        trail = rules.get("profit_trail")
+        if trail and buy_prices and buy_dates:
+            close = self.prepared["last_close"]
+            for symbol, paid in buy_prices.items():
+                if symbol not in close or symbol not in buy_dates:
+                    continue
+                since = close[symbol][close.index >= pd.Timestamp(buy_dates[symbol]).normalize()]
+                peak = max([paid] + [float(v) for v in since.dropna()])
+                plan["peaks"][symbol] = peak
+                last = plan["last_price"].get(symbol)
+                if trail.get("trail") and peak >= paid * (1 + trail["trigger"]) \
+                        and last is not None and last <= peak * (1 - trail["trail"]):
+                    plan["trailed"].append(symbol)
+            plan["sell"] = list(dict.fromkeys(plan["sell"] + plan["trailed"]))
+            plan["keep"] = [s for s in plan["keep"] if s not in plan["trailed"]]
         plan["cash_text"] = (f"Fewer than half of the market checks pass. The model buys "
                              "nothing until at least half do.")
         plan["sell_reason"] = "too few market checks pass"

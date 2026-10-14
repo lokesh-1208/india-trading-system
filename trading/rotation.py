@@ -141,7 +141,8 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
              check="month", positions_wanted=None, keep_rank=None, stop_loss=None,
              trend_exit=False, buy_rank=None, max_gap=None, limit_days=None,
              max_drop=None, min_room=None, max_spike=None, midweek_fill=False,
-             budget_scale=None, exit_before=None):
+             budget_scale=None, exit_before=None, industry=None, max_per_industry=None,
+             profit_trail=None):
     """Follow the rule day by day. Returns equity, trades, open positions and scores.
 
     scorer: optional. A function that takes a day's position in the calendar and
@@ -183,6 +184,13 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     stock opens at or below that price, at the limit price if the day's low goes
     below it, and is cancelled otherwise. A waiting order keeps its slot.
     Every trade records gap_% (open on the buy day against the signal close).
+    industry, max_per_industry: {symbol: industry} and for example 2. A stock is not
+    bought while that many holdings are already in its industry.
+    profit_trail: for example {"trigger": 0.10, "trail": 0.07}: once a holding has
+    closed at least `trigger` above its buy price, it is sold at the next open after
+    a close `trail` below its highest close since the buy. {"trigger": 0.10,
+    "fast": True} instead sells after a close below the faster trend line
+    (prepared["in_trend_fast"]).
     """
     positions_wanted = config.ROTATION_POSITIONS if positions_wanted is None else positions_wanted
     keep_rank = config.ROTATION_KEEP_RANK if keep_rank is None else keep_rank
@@ -195,6 +203,14 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
              exit_before.reindex(index=prepared["calendar"], columns=prepared["symbols"])
              .fillna(False).to_numpy(dtype=bool))
     room = prepared["room"].to_numpy(dtype=float) if min_room is not None else None
+    fast_trend = (prepared["in_trend_fast"].to_numpy(dtype=bool)
+                  if profit_trail and profit_trail.get("fast") else None)
+
+    def industry_full(symbol):
+        if not max_per_industry or industry is None:
+            return False
+        group = industry.get(symbol, "")
+        return bool(group) and sum(industry.get(s, "") == group for s in positions) >= max_per_industry
     spike = prepared["spike"].to_numpy(dtype=float) if max_spike is not None else None
     capital = float(config.CAPITAL if capital is None else capital)
     calendar = prepared["calendar"]
@@ -257,7 +273,7 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
         cost = charges.buy_charges(quantity * price)
         cash -= quantity * price + cost
         positions[symbol] = {"quantity": quantity, "entry": price,
-                             "entry_day": day, "buy_cost": cost, "gap": gap}
+                             "entry_day": day, "buy_cost": cost, "gap": gap, "peak": price}
         return True
 
     def try_limit(symbol, day, limit):
@@ -299,8 +315,19 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
             if np.isnan(opens[day, column[symbol]]):
                 continue
             floor = None if stop_loss is None else positions[symbol]["entry"] * (1 - stop_loss)
-            if floor is not None and last_close[yesterday, column[symbol]] <= floor:
+            close_then = last_close[yesterday, column[symbol]]
+            holding = positions[symbol]
+            if not np.isnan(close_then):
+                holding["peak"] = max(holding["peak"], close_then)
+            locked = (profit_trail is not None
+                      and holding["peak"] >= holding["entry"] * (1 + profit_trail["trigger"]))
+            if floor is not None and close_then <= floor:
                 sell(symbol, day, "stop-loss")
+            elif locked and profit_trail.get("trail") and \
+                    close_then <= holding["peak"] * (1 - profit_trail["trail"]):
+                sell(symbol, day, "profit trail")
+            elif locked and fast_trend is not None and not fast_trend[yesterday, column[symbol]]:
+                sell(symbol, day, "profit trail")
             elif trend_exit and not in_trend[yesterday, column[symbol]]:
                 sell(symbol, day, "trend broke")
             elif leave is not None and leave[yesterday, column[symbol]]:
@@ -348,6 +375,8 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
                     if len(positions) + len(pending) >= positions_wanted:
                         break
                     if symbol in positions or symbol in pending or not tradable(symbol):
+                        continue
+                    if industry_full(symbol):
                         continue
                     if room is not None and not room[yesterday, column[symbol]] >= min_room:
                         skipped["room"] += 1

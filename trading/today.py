@@ -175,6 +175,8 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
     since the buy yet, so it is marked WAIT and shows no gain.
     """
     stop = rules()["stop_loss"]
+    trail = rules().get("profit_trail") or {}
+    trailed, peaks = set(plan.get("trailed", [])), plan.get("peaks", {})
     stopped, broken = set(plan.get("stopped", [])), set(plan.get("trend_broken", []))
     sell = set(plan["sell"])
     rows = []
@@ -193,6 +195,9 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
                                           "today's close")
             elif symbol in stopped:
                 action, reason = "SELL", f"{stop:.0%} or more below your buy price (stop-loss)"
+            elif symbol in trailed:
+                action, reason = "SELL", (f"fell {trail['trail']:.0%} from its high after a "
+                                          f"{trail['trigger']:.0%}+ gain (profit trail)")
             elif symbol in broken:
                 action, reason = "SELL", f"closed below its {config.EMA_FAST}-day EMA (trend broke)"
             elif symbol in sell:
@@ -212,6 +217,13 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
             })
             line = rows[-1]["trend_line"]
             exit_line = max(rows[-1]["stop_loss"], line) if line == line else rows[-1]["stop_loss"]
+            # Profit trail: active once the high since the buy is `trigger` above the buy price.
+            peak = peaks.get(symbol)
+            rows[-1]["peak"] = None if peak is None else round(peak, 2)
+            rows[-1]["trail_from"] = round(paid * (1 + trail["trigger"]), 2) if trail else None
+            rows[-1]["trail_active"] = bool(trail and peak and peak >= paid * (1 + trail["trigger"]))
+            if rows[-1]["trail_active"] and trail.get("trail"):
+                exit_line = max(exit_line, peak * (1 - trail["trail"]))
             rows[-1]["exit_line"] = round(exit_line, 2)
             rows[-1]["exit_pct"] = round((exit_line / paid - 1) * 100, 1)
             rows[-1]["exit_rs"] = round((exit_line - paid) * row["quantity"])
@@ -222,7 +234,8 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
     return pd.DataFrame(rows, columns=["symbol", "action", "reason", "quantity", "buy_price",
                                        "last_price", "gain_%", "stop_loss", "trend_line",
                                        "bought", "days_held", "exit_line", "exit_pct",
-                                       "exit_rs", "gtt"])
+                                       "exit_rs", "gtt", "peak", "trail_from",
+                                       "trail_active"])
 
 
 def avoid_list(plan):

@@ -159,6 +159,22 @@ def clean_prices(raw):
     return table.sort_index()
 
 
+# NSE's closing prices are final a little after 3:30 pm. Before this hour, a row for
+# today is the price so far, not a close, and must not be treated as one.
+CLOSE_READY_HOUR = 16
+
+
+def drop_unfinished_day(table, now=None):
+    """Remove today's row (India time) while the market day is not over yet."""
+    if table is None or len(table) == 0:
+        return table
+    now = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None) if now is None \
+        else pd.Timestamp(now)
+    if now.hour >= CLOSE_READY_HOUR or now.weekday() >= 5:
+        return table
+    return table[table.index.normalize() < now.normalize()]
+
+
 # ------------------------------------------------------------- download -----
 def download_batch(tickers, start=config.HISTORY_START):
     """Download daily prices for several Yahoo tickers in one request.
@@ -210,10 +226,12 @@ def keep_newer_days(table, path):
     return pd.concat([table, newer]).sort_index()
 
 
-def _download_group(jobs, folder, label, report=_print_progress):
+def _download_group(jobs, folder, label, report=_print_progress, unfinished=False):
     """Download a list of (name, ticker) pairs into a folder. Returns failures.
 
     report(step, done, total) is called after every batch to show progress.
+    unfinished=False drops today's row during market hours (Indian stocks: an update
+    run at 11 am must not save the price so far as today's close).
     """
     failed = []
     for first in range(0, len(jobs), BATCH_SIZE):
@@ -228,6 +246,8 @@ def _download_group(jobs, folder, label, report=_print_progress):
             if table is None or len(table) == 0:
                 failed.append(name)
             else:
+                if not unfinished:
+                    table = drop_unfinished_day(table)
                 keep_newer_days(table, folder / f"{name}.csv").to_csv(folder / f"{name}.csv")
         report(label, min(first + BATCH_SIZE, len(jobs)), len(jobs))
         time.sleep(0.5)  # be polite to the free data source
@@ -243,7 +263,9 @@ def update_markets(report=_print_progress):
     config.MARKET_DIR.mkdir(parents=True, exist_ok=True)
     update_membership()
     market_jobs = list(config.MARKET_SYMBOLS.items())
-    return _download_group(market_jobs, config.MARKET_DIR, "Markets", report)
+    # Markets keep today's row: Asian indices close during the Indian day, and the
+    # before-open page needs them. The model cuts Nifty at the last stock close.
+    return _download_group(market_jobs, config.MARKET_DIR, "Markets", report, unfinished=True)
 
 
 def download_stocks(symbols, report=_print_progress, label="Stock prices"):
@@ -300,7 +322,7 @@ def load_all_stocks():
         try:
             stocks = pd.read_pickle(config.PRICES_CACHE)
             if set(stocks) <= set(files):
-                return stocks
+                return {symbol: drop_unfinished_day(table) for symbol, table in stocks.items()}
         except Exception:
             pass  # unreadable or from an older library version: rebuild it below
 
@@ -313,7 +335,7 @@ def load_all_stocks():
         pd.to_pickle(stocks, config.PRICES_CACHE)
     except Exception:
         pass  # the cache only saves time; nothing depends on it
-    return stocks
+    return {symbol: drop_unfinished_day(table) for symbol, table in stocks.items()}
 
 
 def coverage_by_year(membership, symbols_with_prices, first_year, last_year):

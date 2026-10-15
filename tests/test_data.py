@@ -81,3 +81,15 @@ def test_a_download_missing_the_last_saved_day_keeps_that_day(tmp_path):
     download = saved.iloc[:2]                     # Yahoo dropped 13 Oct
     merged = data.keep_newer_days(download, path)
     assert list(merged.index.strftime("%d")) == ["09", "12", "13"]
+
+
+def test_todays_row_is_dropped_until_the_close_is_final():
+    from trading import data as prices
+    days = pd.to_datetime(["2026-10-14", "2026-10-15"])
+    table = pd.DataFrame({"Close": [227.99, 227.77]}, index=days)
+    morning = prices.drop_unfinished_day(table, now="2026-10-15 11:33")
+    assert list(morning.index) == [pd.Timestamp("2026-10-14")]
+    evening = prices.drop_unfinished_day(table, now="2026-10-15 16:30")
+    assert len(evening) == 2
+    next_day = prices.drop_unfinished_day(table, now="2026-10-16 10:00")
+    assert len(next_day) == 2

@@ -70,6 +70,11 @@ function HoldCard({ row, quote }: { row: Holding; quote?: LivePrice }) {
           </span>
         )}
         <span className="small muted">day {holdingDay(row.bought)} of holding</span>
+        {row.size_vs_plan != null && row.size_vs_plan > 1.5 ? (
+          <span className="small down" style={{ fontWeight: 600 }} data-testid="oversized">
+            {row.size_vs_plan.toFixed(1)}× today's place size: bigger than the plan
+          </span>
+        ) : null}
         {row.size_vs_plan != null && row.size_vs_plan < 0.8 ? (
           <span className="small muted" title="The model never adds to a holding; this is for information.">
             {Math.round(row.size_vs_plan * 100)}% of today's place size
@@ -105,6 +110,7 @@ function MoneyPlanPanel({ plan }: { plan: MoneyPlan }) {
         </p>
       ) : null}
       <p className="small muted" style={{ margin: 0 }}>{plan.note}</p>
+      {plan.warning ? <p className="small down" style={{ margin: 0, fontWeight: 600 }} data-testid="money-warning">{plan.warning}</p> : null}
     </div>
   );
 }
@@ -155,7 +161,7 @@ function MoodCard({ version }: { version: number }) {
 
 const STATUS_TONE: Record<string, string> = {
   Buy: "blue", Backup: "plain", "You hold": "up", Missed: "plain", "Trend broke": "down",
-  "Results soon": "warn", "Too costly": "plain", "Market weak": "warn",
+  "Results soon": "warn", "Too costly": "plain", "Market weak": "warn", "Monday only": "plain",
 };
 
 // One short reason per status, on one line (the full sentence is in the tooltip).
@@ -165,6 +171,7 @@ function shortWhy(row: WeekRow) {
     case "Trend broke": return "below 20-day avg";
     case "Results soon": return "results within 5 days";
     case "Too costly": return "one share > amount";
+    case "Monday only": return "bought only at Monday's open";
     default: return "";
   }
 }
@@ -312,7 +319,9 @@ export default function TodayPage() {
                     : "Market is closed: prices shown are the last traded ones."}
             </p>
             {!market.ok ? <Empty>The market is weak, so the model buys nothing today.</Empty>
-              : data.buys.length === 0 ? <Empty>Nothing on this week's list is buyable today.</Empty>
+              : data.buys.length === 0 ? (data.buy_window && !data.buy_window.open
+                ? <Empty>No buys until {day(data.buy_window.next)}. The tested model buys only at the first open of the week; buying the week's picks on later days made results worse.</Empty>
+                : <Empty>Nothing on this week's list is buyable today.</Empty>)
                 : data.buys.map((item) => {
                   const now = quote(item.symbol);
                   const above = now !== undefined && now.price > item.ladder.limit;

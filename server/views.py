@@ -152,7 +152,8 @@ def list_summary(status_table, places, market_ok):
                           ("Missed", "{} ran more than 2% above their list price (the model does not chase)"),
                           ("Trend broke", "{} closed below the 20-day average"),
                           ("Results soon", "{} have results due within 5 days"),
-                          ("Too costly", "{} cost more per share than the money per stock")]:
+                          ("Too costly", "{} cost more per share than the money per stock"),
+                          ("Monday only", "{} were buyable only at Monday's open")]:
         if counts.get(status, 0):
             parts.append(words.format(int(counts[status])))
     text = f"This week's list has {len(status_table)} stocks"
@@ -190,6 +191,13 @@ def today_page(money=None):
     places = max(0, rules["positions"] - len(held))
     status_table = picks.weekly_status(weekly, prices, built.trading["in_trend"].iloc[-1], due,
                                        set(held), places, above, budget=per_stock)
+    # The tested model buys only at the open of the week's first trading day. Buying the
+    # week's picks on later days was tested and made the worst fall deeper (backtest log,
+    # entry 9), so from then until the next list nothing is bought.
+    first_day = pd.Timestamp(weekly["list_day"].iloc[0]).normalize() if len(weekly) else None
+    window_open = first_day is not None and today.buy_day(now).normalize() == first_day
+    if not window_open:
+        status_table.loc[status_table["status"] == "Buy", "status"] = "Monday only"
     buy_now = status_table[status_table["status"] == "Buy"].head(places)
     buy_symbols = set(buy_now["symbol"])
     ranking = plan["today"]
@@ -199,6 +207,15 @@ def today_page(money=None):
         account_totals["closed_net"], rules["positions"], len(held), share,
         list(zip(buyable["symbol"], buyable["limit"])) if plan["market_ok"] else [])
     planned = {item["symbol"]: item["shares"] for item in money_plan["buys"]}
+    next_monday = next_list_day(list_day)
+    if not window_open and plan["market_ok"]:
+        money_plan["note"] = (f"No new buys until {next_monday:%a %d %b}: the model buys only at "
+                              "the first open of the week. Keep the cash until then.")
+    if money_plan["invested"] > money_plan["capital"]:
+        money_plan["warning"] = (
+            f"Your stocks cost ₹{money_plan['invested']:,.0f}, more than your trading money "
+            f"₹{money_plan['capital']:,.0f}. Raise the trading money above if you added money; "
+            "otherwise no new buys until something is sold.")
 
     def about(symbol, rank=None, score=None):
         parts = []
@@ -269,6 +286,9 @@ def today_page(money=None):
     if holding:
         parts.append(f"hold {holding}")
     headline = ", ".join(parts).capitalize() if parts else "Nothing to do today"
+    if not window_open and plan["market_ok"] and not to_buy:
+        headline = ", ".join(parts).capitalize() + " · next buys Monday" if parts \
+            else f"No buys until {next_monday:%a %d %b}"
     if not plan["market_ok"]:
         headline = "Market weak: no new buys" + (f", sell {len(sells)}" if sells else "")
 
@@ -304,6 +324,7 @@ def today_page(money=None):
         "list_from": weekly["signal_day"].iloc[0] if len(weekly) else None,
         "next_list": next_list_day(list_day),
         "headline": headline, "nothing_to_sell": not sells, "explain": explain,
+        "buy_window": {"open": bool(window_open), "day": first_day, "next": next_monday},
         "money_plan": money_plan,
         "market": {"level": plan["market_level"], "note": plan["market_note"],
                    "ok": bool(plan["market_ok"]), "share": share, "per_stock": per_stock,

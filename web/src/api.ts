@@ -49,7 +49,7 @@ export type BuyItem = {
 export type MoneyPlan = {
   capital: number; account: number; cash: number; invested: number; holdings_value: number;
   per_stock: number; share: number; places: number; spend: number; cash_after: number;
-  open_places_after: number; reserve: number; idle: number; note: string;
+  open_places_after: number; reserve: number; idle: number; note: string; warning?: string | null;
   buys: { symbol: string; shares: number; limit: number; amount: number }[];
 };
 export type WeekRow = {
@@ -65,7 +65,7 @@ export type Holding = {
 };
 export type Today = {
   list_day: string; signal_day: string; week_of: string; headline: string; nothing_to_sell: boolean;
-  explain: string; money_plan: MoneyPlan; list_from: string | null; next_list: string; week_list: WeekRow[]; week_days: string[];
+  explain: string; money_plan: MoneyPlan; buy_window?: { open: boolean; day: string | null; next: string }; list_from: string | null; next_list: string; week_list: WeekRow[]; week_days: string[];
   market: {
     level: string; note: string; ok: boolean; share: number; per_stock: number; money: number;
     positions: number; checks_pass: number; checks_total: number; checks_unknown: string[]; stop_loss: number; max_gap: number;

@@ -110,3 +110,18 @@ test.describe("Before 9:15 am", () => {
     await expect(page.getByRole("heading", { name: "Before the open" })).toBeVisible();
   });
 });
+
+test("after Monday the page says no buys until the next list, and warns about size", async ({ page }) => {
+  const today = fixture("today");
+  today.buys = [];
+  today.buy_window = { open: false, day: "2026-10-12T00:00:00", next: "2026-10-19T00:00:00" };
+  today.money_plan = { ...today.money_plan, buys: [], spend: 0,
+    note: "No new buys until Mon 19 Oct: the model buys only at the first open of the week. Keep the cash until then.",
+    warning: "Your stocks cost ₹161,971, more than your trading money ₹100,000." };
+  today.holds[0].size_vs_plan = 3.01;
+  await mockApi(page, { today });
+  await page.goto("/");
+  await expect(page.locator("#buy")).toContainText("No buys until Mon, 19 Oct");
+  await expect(page.getByTestId("money-warning")).toContainText("more than your trading money");
+  await expect(page.getByTestId("oversized")).toContainText("3.0× today's place size");
+});

@@ -163,7 +163,7 @@ def money_plan(capital, open_cost, holdings_value, closed_net, positions, held, 
             "per_stock": round(per_stock), "share": share, "places": places,
             "buys": buys, "spend": round(sum(item["amount"] for item in buys)),
             "cash_after": round(left), "open_places_after": open_places,
-            "reserve": round(reserve), "idle": round(idle), "note": note}
+            "reserve": round(reserve), "idle": round(idle), "note": note, "warning": None}
 
 
 def my_stocks(plan, positions, trend_lines, last_day=None):

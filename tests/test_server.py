@@ -113,3 +113,10 @@ def test_missing_flow_days_lists_trading_days_the_update_missed():
 def test_next_list_is_the_coming_monday():
     assert views.next_list_day("2026-10-12") == pd.Timestamp("2026-10-19")
     assert views.next_list_day("2026-10-16") == pd.Timestamp("2026-10-19")
+
+
+def test_list_summary_explains_picks_buyable_only_on_monday():
+    table = pd.DataFrame({"status": ["You hold", "Monday only", "Monday only", "Missed"]})
+    text = views.list_summary(table, 1, True)
+    assert "2 were buyable only at Monday's open" in text
+    assert text.endswith("None of them can be bought today.")

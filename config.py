@@ -225,7 +225,16 @@ MODEL_STYLES = {
               # In a caution market (buying allowed but not strong) each new buy gets 75%
               # of the normal amount. Tested 13 Oct 2026: worst fall -20.7% -> -18.1%,
               # smaller in both halves of the history, growth 19.6% -> 18.7% a year.
-              "caution_share": 0.75},
+              "caution_share": 0.75,
+              # Sell only after TWO closes in a row below the 20-day EMA, not the first
+              # one. Tested 16 Oct 2026 after three real losses (backtest log, entry 11):
+              # better growth and a smaller worst fall in all three periods since 2018,
+              # with 4, 5 and 6 stocks and from every start month tried.
+              "exit_confirm": 2,
+              # Size each buy so a 1.5 x ATR fall costs about 1% of the account; a calm
+              # stock still gets the normal place. Tested 16 Oct 2026: smaller worst fall in
+              # all three periods, growth a little lower in 2022-24 (entry 11).
+              "risk_per_trade": 0.01},
               # A profit trail ("profit_trail": {"trigger": 0.15, "trail": 0.10}) was tested
               # on 14 Oct 2026 and not adopted: no clear effect once share counts were fixed
               # (backtest log, entry 10). The option stays in rotation.simulate.

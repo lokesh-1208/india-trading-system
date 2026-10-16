@@ -13,7 +13,7 @@ close is Monday's list.
 import pandas as pd
 
 import config
-from trading import today
+from trading import holidays, today
 
 COLUMNS = ["list_day", "signal_day", "rank", "symbol", "score", "close", "weekly"]
 
@@ -22,10 +22,7 @@ def next_trading_day(calendar, position):
     """The day a list made from this close is for."""
     if position + 1 < len(calendar):
         return calendar[position + 1]
-    day = calendar[position] + pd.Timedelta(days=1)
-    while day.weekday() >= 5:
-        day += pd.Timedelta(days=1)
-    return day
+    return holidays.next_trading_day(calendar[position])
 
 
 def _week(day):
@@ -76,10 +73,16 @@ def update_log(built, path=None, weeks=2):
     first_monday = pd.Timestamp.fromisocalendar(this_week[0], this_week[1], 1) \
         - pd.Timedelta(weeks=weeks - 1)
     done = set(pd.to_datetime(log["signal_day"]).dt.normalize()) if len(log) else set()
+    unfinished = _unfinished_day()
     new = []
     for position in range(latest, -1, -1):
         if next_trading_day(calendar, position) < first_monday:
             break
+        # A list is saved for good, so never make one from a day that has not closed yet
+        # (16 Oct 2026: a list saved at 11:34 am from the morning's prices kept CUB and
+        # CHENNPETRO on it after their close fell below the trend line).
+        if calendar[position].normalize() == unfinished:
+            continue
         if calendar[position].normalize() not in done:
             new.append(daily_list(built, position))
     if new:
@@ -88,6 +91,13 @@ def update_log(built, path=None, weeks=2):
         path.parent.mkdir(parents=True, exist_ok=True)
         log.to_csv(path, index=False)
     return log
+
+
+def _unfinished_day(now=None):
+    """Today's date (India time) before its close is final, else None."""
+    now = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None) if now is None \
+        else pd.Timestamp(now)
+    return now.normalize() if now.hour < today.CLOSE_READY_HOUR else None
 
 
 def tracker(log, list_day, closes, benchmark=None):

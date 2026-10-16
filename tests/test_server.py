@@ -120,3 +120,12 @@ def test_list_summary_explains_picks_buyable_only_on_monday():
     text = views.list_summary(table, 1, True)
     assert "2 were buyable only at Monday's open" in text
     assert text.endswith("None of them can be bought today.")
+
+
+def test_delete_and_undo_sell_reach_the_journal(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(views, "delete_trade", lambda row: calls.append(("delete", row)) or {})
+    monkeypatch.setattr(views, "undo_sell", lambda row: calls.append(("undo", row)) or {})
+    assert client.post("/api/trades/delete", json={"row": 2}).status_code == 200
+    assert client.post("/api/trades/undo-sell", json={"row": 1}).status_code == 200
+    assert calls == [("delete", 2), ("undo", 1)]

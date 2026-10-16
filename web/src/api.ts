@@ -170,7 +170,7 @@ export type Trades = {
     last_price: number; value: number; gain: number; "gain_%": number; note: string;
   }[];
   closed: {
-    symbol: string; buy_date: string; buy_price: number; quantity: number; sell_date: string;
+    row: number; symbol: string; buy_date: string; buy_price: number; quantity: number; sell_date: string;
     sell_price: number; profit: number; "profit_%": number; charges: number; net_profit: number;
   }[];
   symbols: string[];

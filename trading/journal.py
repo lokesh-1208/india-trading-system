@@ -17,7 +17,8 @@ def load():
     """All recorded trades. An empty table if nothing has been recorded."""
     if not config.REAL_TRADES_FILE.exists():
         return pd.DataFrame(columns=COLUMNS)
-    table = pd.read_csv(config.REAL_TRADES_FILE, dtype={"note": str})
+    table = pd.read_csv(config.REAL_TRADES_FILE,
+                        dtype={"note": str, "symbol": str, "buy_date": str, "sell_date": str})
     for column in ["buy_price", "quantity", "sell_price"]:
         table[column] = pd.to_numeric(table[column], errors="coerce")
     table["note"] = table["note"].fillna("")
@@ -46,8 +47,31 @@ def record_sell(table, row_number, sell_date, sell_price):
     if pd.notna(table.loc[row_number, "sell_price"]):
         raise ValueError("That position is already closed.")
     result = table.copy()
+    # With no sells yet the sell_date column is read as empty numbers, which
+    # refuses a date string. Treat it as text before writing the date.
+    result["sell_date"] = result["sell_date"].astype(object)
     result.loc[row_number, "sell_date"] = str(sell_date)
     result.loc[row_number, "sell_price"] = float(sell_price)
+    return result
+
+
+def delete_row(table, row_number):
+    """Return the table without one recorded trade, for a buy entered by mistake."""
+    if row_number not in table.index:
+        raise ValueError("That trade was not found.")
+    return table.drop(index=row_number).reset_index(drop=True)
+
+
+def undo_sell(table, row_number):
+    """Return the table with one sale removed, so the position is open again."""
+    if row_number not in table.index:
+        raise ValueError("That trade was not found.")
+    if pd.isna(table.loc[row_number, "sell_price"]):
+        raise ValueError("That position has not been sold.")
+    result = table.copy()
+    result["sell_date"] = result["sell_date"].astype(object)
+    result.loc[row_number, "sell_date"] = None
+    result.loc[row_number, "sell_price"] = float("nan")
     return result
 
 

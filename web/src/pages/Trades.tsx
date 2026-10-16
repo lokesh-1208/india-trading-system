@@ -15,6 +15,8 @@ export default function TradesPage() {
   const [buy, setBuy] = useState({ symbol: "", date: todayText(), price: "", quantity: "", note: "" });
   const [sell, setSell] = useState({ row: "", date: todayText(), price: "" });
   const [message, setMessage] = useState<{ tone: string; text: string } | null>(null);
+  // A delete or undo asks once more on the same button before it happens.
+  const [confirming, setConfirming] = useState<string | null>(null);
   const openSymbols = data ? Array.from(new Set(data.open.map((row) => row.symbol))).sort() : [];
   const { live } = useLive(openSymbols);
 
@@ -42,6 +44,26 @@ export default function TradesPage() {
       .catch((problem: Error) => setMessage({ tone: "down", text: problem.message }));
   };
 
+  const fixMistake = (kind: "delete" | "undo-sell", row: number, done: string) => {
+    const key = `${kind}-${row}`;
+    if (confirming !== key) { setConfirming(key); return; }
+    setConfirming(null);
+    postJson<Trades>(`/api/trades/${kind}`, { row })
+      .then((found) => { setData(found); setMessage({ tone: "up", text: done }); })
+      .catch((problem: Error) => setMessage({ tone: "down", text: problem.message }));
+  };
+  const fixButton = (kind: "delete" | "undo-sell", row: number, label: string, done: string) => {
+    const asking = confirming === `${kind}-${row}`;
+    return (
+      <td className="right">
+        <button type="button" className={`small${asking ? " danger" : ""}`} onClick={() => fixMistake(kind, row, done)}
+          onBlur={() => asking && setConfirming(null)} title={asking ? "Click again to confirm" : label}>
+          {asking ? "Sure?" : label}
+        </button>
+      </td>
+    );
+  };
+
   return (
     <>
       <h1>Your trades</h1>
@@ -67,7 +89,7 @@ export default function TradesPage() {
               <div className="table-wrap">
                 <table>
                   <thead><tr><th>Stock</th><th>Bought</th><th className="right">Price</th><th className="right">Qty</th>
-                    <th className="right">{isLive ? "Live" : "Last close"}</th><th className="right">Gain</th></tr></thead>
+                    <th className="right">{isLive ? "Live" : "Last close"}</th><th className="right">Gain</th><th></th></tr></thead>
                   <tbody>
                     {data.open.map((row) => (
                       <tr key={row.row}>
@@ -81,6 +103,7 @@ export default function TradesPage() {
                           const gainPct = (nowPrice(row.symbol, row.last_price) / row.buy_price - 1) * 100;
                           return <td className={`right num ${gain >= 0 ? "up" : "down"}`}>{signedRupees(gain)} ({pct(gainPct)})</td>;
                         })()}
+                        {fixButton("delete", row.row, "Delete", `Deleted the ${row.symbol} buy.`)}
                       </tr>
                     ))}
                   </tbody>
@@ -93,16 +116,17 @@ export default function TradesPage() {
               <div className="table-wrap">
                 <table>
                   <thead><tr><th>Stock</th><th>Bought</th><th>Sold</th><th className="right">Profit</th>
-                    <th className="right">Charges</th><th className="right">After charges</th></tr></thead>
+                    <th className="right">Charges</th><th className="right">After charges</th><th></th></tr></thead>
                   <tbody>
                     {data.closed.map((row) => (
-                      <tr key={row.symbol + row.buy_date + row.sell_date}>
+                      <tr key={row.row}>
                         <td style={{ fontWeight: 600 }}>{row.symbol}</td>
                         <td className="small">{day(row.buy_date)} at {price(row.buy_price)}</td>
                         <td className="small">{day(row.sell_date)} at {price(row.sell_price)}</td>
                         <td className={`right num ${row.profit >= 0 ? "up" : "down"}`}>{signedRupees(row.profit)} ({pct(row["profit_%"])})</td>
                         <td className="right num muted">{rupees(row.charges, 2)}</td>
                         <td className={`right num ${row.net_profit >= 0 ? "up" : "down"}`}>{signedRupees(row.net_profit)}</td>
+                        {fixButton("undo-sell", row.row, "Undo sell", `Undid the ${row.symbol} sale; it is open again.`)}
                       </tr>
                     ))}
                   </tbody>
@@ -143,6 +167,7 @@ export default function TradesPage() {
               </form>
             )}
           </Panel>
+          <p className="small muted">Entered something by mistake? "Delete" removes an open buy; "Undo sell" reopens a sold position. Both ask once more before saving.</p>
           <p className="small muted">Saved in journal/real_trades.csv on this computer only. Keep your own backup of it.</p>
         </aside>
       </div>

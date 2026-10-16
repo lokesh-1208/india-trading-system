@@ -692,6 +692,7 @@ def trades_page():
     positions = journal.open_positions(trades, prices, last_day)
     positions = positions.assign(row=positions.index)
     closed = journal.closed_trades(trades)
+    closed = closed.assign(row=closed.index)
     return clean({"totals": totals, "open": records(positions), "closed": records(closed),
                   "symbols": sorted(STORE.stocks())})
 
@@ -709,6 +710,16 @@ def record_sell(row, day, price):
     if row not in trades.index:
         raise ValueError("That position was not found.")
     journal.save(journal.record_sell(trades, row, day, price))
+    return trades_page()
+
+
+def delete_trade(row):
+    journal.save(journal.delete_row(journal.load(), row))
+    return trades_page()
+
+
+def undo_sell(row):
+    journal.save(journal.undo_sell(journal.load(), row))
     return trades_page()
 
 

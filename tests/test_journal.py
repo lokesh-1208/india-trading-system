@@ -84,3 +84,32 @@ def test_a_position_bought_after_the_last_close_is_valued_at_its_cost():
     table = journal.record_buy(pd.DataFrame(columns=journal.COLUMNS), "ABC", "2026-10-13", 100.0, 10)
     positions = journal.open_positions(table, {"ABC": 90.0}, last_day="2026-10-12")
     assert positions.iloc[0]["last_price"] == 100.0
+
+
+def test_a_sell_saves_when_the_file_has_no_sells_yet(tmp_path, monkeypatch):
+    # An all-empty sell_date column is read back as numbers; a sell must still save.
+    import config
+    monkeypatch.setattr(config, "REAL_TRADES_FILE", tmp_path / "real_trades.csv")
+    journal.save(_two_trades())
+    table = journal.record_sell(journal.load(), 0, "2026-10-16", 2100.0)
+    journal.save(table)
+    assert journal.load().loc[0, "sell_date"] == "2026-10-16"
+
+
+def test_a_mistaken_buy_can_be_deleted():
+    table = journal.delete_row(_two_trades(), 0)
+    assert list(table["symbol"]) == ["INFY"] and list(table.index) == [0]
+
+
+def test_a_mistaken_sell_can_be_undone():
+    table = journal.undo_sell(journal.record_sell(_two_trades(), 0, "2026-12-01", 2300.0), 0)
+    assert len(journal.closed_trades(table)) == 0
+    assert list(journal.open_positions(table)["symbol"]) == ["TCS", "INFY"]
+
+
+def test_undo_and_delete_refuse_bad_rows():
+    import pytest
+    with pytest.raises(ValueError):
+        journal.undo_sell(_two_trades(), 0)                  # not sold
+    with pytest.raises(ValueError):
+        journal.delete_row(_two_trades(), 9)

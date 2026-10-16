@@ -139,6 +139,28 @@ def sell(order: Sell):
         raise HTTPException(400, str(exc))
 
 
+class TradeRow(BaseModel):
+    row: int
+
+
+@app.post("/api/trades/delete")
+def delete_trade(target: TradeRow):
+    """Remove a trade entered by mistake (the buy and any sale on that row)."""
+    try:
+        return views.delete_trade(target.row)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/trades/undo-sell")
+def undo_sell(target: TradeRow):
+    """Remove a sale entered by mistake; the position becomes open again."""
+    try:
+        return views.undo_sell(target.row)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 class Job(BaseModel):
     kind: str
 

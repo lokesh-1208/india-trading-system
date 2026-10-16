@@ -52,6 +52,8 @@ export type MoneyPlan = {
   open_places_after: number; reserve: number; idle: number; note: string; warning?: string | null;
   buys: { symbol: string; shares: number; limit: number; amount: number }[];
 };
+export type SectorStock = BuyItem & { group: "top" | "sector" };
+export type Sector = { industry: string; in_top: number; stocks: SectorStock[] };
 export type WeekRow = {
   symbol: string; rank: number; score: number; status: string; why: string; close: number; limit: number;
   last: number; ranks: Record<string, number>; "since_first_%": number | null; "nifty_%": number | null;
@@ -66,6 +68,7 @@ export type Holding = {
 export type Today = {
   list_day: string; signal_day: string; week_of: string; headline: string; nothing_to_sell: boolean;
   explain: string; money_plan: MoneyPlan; buy_window?: { open: boolean; day: string | null; next: string }; list_from: string | null; next_list: string; week_list: WeekRow[]; week_days: string[];
+  sectors?: Sector[]; sector_rules?: { per_sector: number; min_score: number };
   market: {
     level: string; note: string; ok: boolean; share: number; per_stock: number; money: number;
     positions: number; checks_pass: number; checks_total: number; checks_unknown: string[]; stop_loss: number; max_gap: number;

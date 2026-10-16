@@ -238,3 +238,7 @@ details.week[open] > summary::before { content: "▾"; }
   margin-left: 6px; vertical-align: middle; }
 .panel.money { display: flex; flex-direction: column; gap: 10px; margin-bottom: 4px; }
 .week-table td, .week-table th { white-space: nowrap; vertical-align: top; }
+
+/* Best by sector: one block per sector */
+.sector-table tr.sector-head td { background: var(--panel-2); border-top: 1px solid var(--line); padding: 8px 14px; }
+.sector-table tbody + tbody tr.sector-head td { border-top: 6px solid var(--panel); }

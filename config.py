@@ -22,6 +22,12 @@ JOURNAL_FILE = ROOT / "journal" / "trades.csv"
 REAL_TRADES_FILE = ROOT / "journal" / "real_trades.csv"   # your real-money trades
 PICKS_LOG_FILE = ROOT / "journal" / "picks_log.csv"    # every day's top-10 list, kept as made
 DAILY_LIST_SIZE = 10
+# The weekly list also carries the best stocks of each sector (NSE's industry label),
+# so the money can be spread across sectors by your own choice. Up to this many per
+# sector, counting the top 10; a sector with more in the top 10 keeps them all.
+SECTOR_PICKS = 3
+# A sector stock must score at least this (the model calls 60+ strong, 40 or less weak).
+SECTOR_MIN_SCORE = 50
 SHORT_TERM_TAX = 0.20     # tax on gains from shares held under a year (rule in force in 2026;
                           # check with your CA). Losses in the same year reduce taxable gains.
 

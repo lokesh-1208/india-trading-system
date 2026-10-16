@@ -44,7 +44,7 @@ export type Live = { time: string; market_open: boolean; prices: Record<string, 
 export type Ladder = { stop: number; signal: number; limit: number; last: number; low: number; high: number };
 export type BuyItem = {
   symbol: string; rank: number; score: number; about: string; ladder: Ladder; shares: number;
-  amount: number; kind: string; status: string; tag?: string; why?: string;
+  amount: number; kind: string; status: string; tag?: string; why?: string; size_share?: number;
 };
 export type MoneyPlan = {
   capital: number; account: number; cash: number; invested: number; holdings_value: number;
@@ -61,7 +61,7 @@ export type Holding = {
   size_vs_plan?: number | null; peak?: number | null; trail_from?: number | null; trail_active?: boolean;
   last_price: number; "gain_%": number | null; gain_rs: number | null; stop_loss: number;
   trend_line: number | null; bought: string; days_held: number; exit_line: number; exit_pct: number;
-  exit_rs: number; gtt: number;
+  exit_rs: number; gtt: number; warning?: boolean;
 };
 export type Today = {
   list_day: string; signal_day: string; week_of: string; headline: string; nothing_to_sell: boolean;

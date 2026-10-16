@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from trading import (breadth, company, data, flows, journal, model, movers, news, newsview, picks,
+from trading import (breadth, company, data, flows, holidays, journal, model, movers, news, newsview, picks,
                      premarket, today, update)
 
 from server.store import STORE
@@ -134,11 +134,12 @@ def _ladder(stop, signal, limit, last):
 
 
 def next_list_day(list_day):
-    """The Monday a fresh weekly list is made for (from the Friday close before it)."""
+    """The first trading day of next week, which a fresh weekly list is made for (from the
+    last close before it). Usually Monday; Tuesday when Monday is an NSE holiday."""
     day = pd.Timestamp(list_day).normalize() + pd.Timedelta(days=1)
     while day.weekday() != 0:
         day += pd.Timedelta(days=1)
-    return day
+    return holidays.first_trading_day_of_week(day)
 
 
 def list_summary(status_table, places, market_ok):
@@ -202,10 +203,13 @@ def today_page(money=None):
     buy_symbols = set(buy_now["symbol"])
     ranking = plan["today"]
     buyable = status_table[status_table["status"] == "Buy"]
+    # Risk sizing: a jumpy stock gets less than a full place (config "risk_per_trade").
+    scales = built.amount_scales(list(status_table["symbol"]))
     money_plan = today.money_plan(
         money, account_totals["invested"], account_totals["value"],
         account_totals["closed_net"], rules["positions"], len(held), share,
-        list(zip(buyable["symbol"], buyable["limit"])) if plan["market_ok"] else [])
+        list(zip(buyable["symbol"], buyable["limit"])) if plan["market_ok"] else [],
+        scales=scales)
     planned = {item["symbol"]: item["shares"] for item in money_plan["buys"]}
     next_monday = next_list_day(list_day)
     if not window_open and plan["market_ok"]:
@@ -241,8 +245,9 @@ def today_page(money=None):
         item = {"symbol": row.symbol, "rank": row.rank, "score": row.score,
                 "about": about(row.symbol, row.rank, row.score),
                 "ladder": _ladder(stop, row.close, row.limit, row.last),
-                "shares": planned.get(row.symbol, int(per_stock // row.limit) if row.limit > 0
-                                      else 0),
+                "shares": planned.get(row.symbol, int(per_stock * scales.get(row.symbol, 1.0)
+                                                      // row.limit) if row.limit > 0 else 0),
+                "size_share": round(scales.get(row.symbol, 1.0), 2),
                 "kind": row.kind, "status": row.status}
         item["amount"] = item["shares"] * row.limit
         if row.symbol in buy_symbols:

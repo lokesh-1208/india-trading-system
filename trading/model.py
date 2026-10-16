@@ -575,11 +575,15 @@ class Model:
         (see rotation.simulate).
         """
         rules = {**config.MODEL_STYLES[style or config.MODEL_STYLE], **entry}
-        if rules.get("caution_share") and rules.get("budget_scale") is None:
-            share = np.where(self.strong_market().to_numpy(), 1.0, rules["caution_share"])
-            rules["budget_scale"] = pd.DataFrame(
-                np.repeat(share[:, None], len(self.prepared["symbols"]), axis=1),
-                index=self.calendar, columns=self.prepared["symbols"])
+        if rules.get("budget_scale") is None and (rules.get("caution_share")
+                                                  or rules.get("risk_per_trade")):
+            scale = pd.DataFrame(1.0, index=self.calendar, columns=self.prepared["symbols"])
+            if rules.get("caution_share"):
+                share = np.where(self.strong_market().to_numpy(), 1.0, rules["caution_share"])
+                scale = scale.mul(share, axis=0)
+            if rules.get("risk_per_trade"):
+                scale = scale * self.risk_scale(rules["risk_per_trade"], rules["positions"])
+            rules["budget_scale"] = scale
         return rotation.simulate(
             self.trading, None, start, end, capital, scorer=self.score_on,
             check=rules["check"], positions_wanted=rules["positions"],
@@ -590,7 +594,8 @@ class Model:
             max_spike=rules.get("max_spike"), midweek_fill=rules.get("midweek_fill", False),
             budget_scale=rules.get("budget_scale"), exit_before=rules.get("exit_before"),
             industry=self.industry, max_per_industry=rules.get("max_per_industry"),
-            profit_trail=rules.get("profit_trail"))
+            profit_trail=rules.get("profit_trail"), exit_confirm=rules.get("exit_confirm"),
+            exit_buffer=rules.get("exit_buffer"))
 
     def decision(self, held_symbols, style=None, buy_prices=None, buy_dates=None):
         """What the model says to do now, given the stocks you really hold.
@@ -608,6 +613,8 @@ class Model:
         plan["trend_exit"] = bool(rules.get("trend_exit"))
         plan["stopped"] = []
         plan["trend_broken"] = []
+        plan["trend_warned"] = []        # one close below the line: sold only after a second
+        plan["exit_confirm"] = int(rules.get("exit_confirm") or 1)
         plan["in_trend"] = self.trading["in_trend"].iloc[-1]
         # The week's picks come from the check day's close and stay fixed all week.
         decided = int(self.calendar.get_loc(plan["decided_on"]))
@@ -615,7 +622,12 @@ class Model:
         plan["signal_in_trend"] = self.trading["in_trend"].iloc[decided]
         if rules.get("trend_exit") and plan["market_ok"]:
             in_trend = plan["in_trend"]
-            plan["trend_broken"] = [s for s in plan["keep"] if not bool(in_trend.get(s, True))]
+            recent = self.trading["in_trend"].iloc[-plan["exit_confirm"]:]
+            below = [s for s in plan["keep"] if not bool(in_trend.get(s, True))]
+            plan["trend_broken"] = [s for s in below if s in recent
+                                    and len(recent) == plan["exit_confirm"]
+                                    and not recent[s].any()]
+            plan["trend_warned"] = [s for s in below if s not in plan["trend_broken"]]
             plan["sell"] = plan["sell"] + plan["trend_broken"]
             plan["keep"] = [s for s in plan["keep"] if s not in plan["trend_broken"]]
             plan["candidates"] = [s for s in plan["candidates"] if bool(in_trend.get(s, False))]
@@ -657,6 +669,21 @@ class Model:
         plan["market_score"] = float(self.market_score.iloc[-1])
         plan["market_level"], plan["market_note"] = self.market_level()
         return plan
+
+    def risk_scale(self, risk, positions):
+        """Share of a full place (0 to 1) for each stock on each day, so that a fall of
+        ATR_STOP_MULTIPLE x ATR on the position costs about `risk` of the account.
+        A calm stock gets the full place; a jumpy one gets less."""
+        atr = self.price["atr_pct"].reindex(index=self.calendar, columns=self.prepared["symbols"])
+        return (risk * positions / (config.ATR_STOP_MULTIPLE * atr)).clip(upper=1.0).fillna(1.0)
+
+    def amount_scales(self, symbols, style=None):
+        """{symbol: share of a full place} on the latest day (1.0 without risk sizing)."""
+        rules = config.MODEL_STYLES[style or config.MODEL_STYLE]
+        if not rules.get("risk_per_trade"):
+            return {symbol: 1.0 for symbol in symbols}
+        latest = self.risk_scale(rules["risk_per_trade"], rules["positions"]).iloc[-1]
+        return {symbol: float(latest.get(symbol, 1.0)) for symbol in symbols}
 
     def strong_market(self):
         """True on days the market is strong: enough checks pass and Nifty is above its average."""

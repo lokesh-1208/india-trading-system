@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 import config
+from trading import holidays
 
 
 def rules():
@@ -26,13 +27,12 @@ def rules():
 
 
 def buy_day(now):
-    """The day an order placed now would be bought: today in market hours, else the next weekday."""
+    """The day an order placed now would be bought: today in market hours, else the next
+    trading day (weekends and NSE holidays skipped)."""
     day = pd.Timestamp(now.date())
-    if now.hour >= CLOSE_READY_HOUR - 1 or day.weekday() >= 5:   # after 3:30 pm or a weekend
-        day += pd.Timedelta(days=1)
-    while day.weekday() >= 5:
-        day += pd.Timedelta(days=1)
-    return day
+    if now.hour >= CLOSE_READY_HOUR - 1:                  # after 3:30 pm
+        return holidays.next_trading_day(day)
+    return holidays.this_or_next_trading_day(day)
 
 
 def results_soon(results, day):
@@ -106,7 +106,8 @@ def buy_list(plan, money, count=10, results_due=None):
         columns="_order").reset_index(drop=True)
 
 
-def money_plan(capital, open_cost, holdings_value, closed_net, positions, held, share, picks):
+def money_plan(capital, open_cost, holdings_value, closed_net, positions, held, share, picks,
+               scales=None):
     """How much to put in today, from the money you actually have.
 
     Follows the backtest's sizing rule exactly: each new buy gets
@@ -120,6 +121,7 @@ def money_plan(capital, open_cost, holdings_value, closed_net, positions, held, 
     held:           how many positions are open
     share:          1.0 in a strong market, 0.75 in caution
     picks:          [(symbol, buy limit)] buyable now, best first
+    scales:         {symbol: share of a full place} from risk sizing (1.0 = full place)
     Returns a dictionary for the page.
     """
     cash = max(0.0, capital + closed_net - open_cost)
@@ -131,14 +133,15 @@ def money_plan(capital, open_cost, holdings_value, closed_net, positions, held, 
     for symbol, limit in picks:
         if len(buys) >= places:
             break
-        budget = min(per_stock, left / 1.002)            # leave room for charges
+        scale = 1.0 if not scales else float(scales.get(symbol, 1.0))
+        budget = min(per_stock * scale, left / 1.002)    # leave room for charges
         shares = math.floor(budget / limit) if limit > 0 else 0
         if shares < 1:
             continue
         amount = shares * limit
         left -= amount
         buys.append({"symbol": symbol, "shares": shares, "limit": round(limit, 2),
-                     "amount": round(amount)})
+                     "amount": round(amount), "scale": round(scale, 2)})
     open_places = places - len(buys)
     reserve = min(left, open_places * per_stock)       # kept for places still empty
     idle = max(0.0, left - reserve)
@@ -178,6 +181,8 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
     trail = rules().get("profit_trail") or {}
     trailed, peaks = set(plan.get("trailed", [])), plan.get("peaks", {})
     stopped, broken = set(plan.get("stopped", [])), set(plan.get("trend_broken", []))
+    warned = set(plan.get("trend_warned", []))
+    confirm = int(plan.get("exit_confirm", 1))
     sell = set(plan["sell"])
     rows = []
     if len(positions):
@@ -199,9 +204,15 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
                 action, reason = "SELL", (f"fell {trail['trail']:.0%} from its high after a "
                                           f"{trail['trigger']:.0%}+ gain (profit trail)")
             elif symbol in broken:
-                action, reason = "SELL", f"closed below its {config.EMA_FAST}-day EMA (trend broke)"
+                action, reason = "SELL", (
+                    f"closed below its {config.EMA_FAST}-day EMA "
+                    + (f"{confirm} days in a row " if confirm > 1 else "") + "(trend broke)")
             elif symbol in sell:
                 action, reason = "SELL", plan.get("sell_reason", "the model is out of the market")
+            elif symbol in warned:
+                action, reason = "HOLD", (
+                    f"WARNING: closed below its {config.EMA_FAST}-day EMA once. Hold for now; "
+                    "sell if the next close is also below it")
             else:
                 action, reason = "HOLD", (f"above its {config.EMA_FAST}-day EMA and above the "
                                           "stop-loss")
@@ -213,7 +224,7 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
                            else round((row["last_price"] / paid - 1) * 100, 1)),
                 "stop_loss": round(paid * (1 - stop), 2),
                 "trend_line": round(float(trend_lines.get(symbol, float("nan"))), 2),
-                "bought": bought, "days_held": days,
+                "bought": bought, "days_held": days, "warning": symbol in warned,
             })
             line = rows[-1]["trend_line"]
             exit_line = max(rows[-1]["stop_loss"], line) if line == line else rows[-1]["stop_loss"]
@@ -235,7 +246,7 @@ def my_stocks(plan, positions, trend_lines, last_day=None):
                                        "last_price", "gain_%", "stop_loss", "trend_line",
                                        "bought", "days_held", "exit_line", "exit_pct",
                                        "exit_rs", "gtt", "peak", "trail_from",
-                                       "trail_active"])
+                                       "trail_active", "warning"])
 
 
 def avoid_list(plan):
@@ -255,15 +266,12 @@ CLOSE_READY_HOUR = 16
 def latest_close_expected(now):
     """The trading day whose close should be downloadable at `now` (Indian time).
 
-    Weekends are skipped. Market holidays are not known, so on the day after a
-    holiday this can expect one day too many.
+    Weekends and NSE holidays (trading/holidays.py) are skipped.
     """
     day = pd.Timestamp(now.date())
-    if now.hour < CLOSE_READY_HOUR:
-        day -= pd.Timedelta(days=1)          # today's close is not out yet
-    while day.weekday() >= 5:                # Saturday or Sunday: go back to Friday
-        day -= pd.Timedelta(days=1)
-    return day.normalize()
+    if now.hour >= CLOSE_READY_HOUR and holidays.is_trading_day(day):
+        return day.normalize()
+    return holidays.previous_trading_day(day)
 
 
 def data_status(last_price_day, now):

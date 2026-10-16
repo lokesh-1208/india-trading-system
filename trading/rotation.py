@@ -142,7 +142,7 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
              trend_exit=False, buy_rank=None, max_gap=None, limit_days=None,
              max_drop=None, min_room=None, max_spike=None, midweek_fill=False,
              budget_scale=None, exit_before=None, industry=None, max_per_industry=None,
-             profit_trail=None):
+             profit_trail=None, exit_confirm=None, exit_buffer=None):
     """Follow the rule day by day. Returns equity, trades, open positions and scores.
 
     scorer: optional. A function that takes a day's position in the calendar and
@@ -191,6 +191,10 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     a close `trail` below its highest close since the buy. {"trigger": 0.10,
     "fast": True} instead sells after a close below the faster trend line
     (prepared["in_trend_fast"]).
+    exit_confirm: for example 2. With trend_exit, sell only after this many closes in a
+    row below the trend line, not after the first one.
+    exit_buffer: for example 0.01. With trend_exit, sell only on a close more than this
+    far below the trend line (needs prepared["room"]).
     """
     positions_wanted = config.ROTATION_POSITIONS if positions_wanted is None else positions_wanted
     keep_rank = config.ROTATION_KEEP_RANK if keep_rank is None else keep_rank
@@ -202,7 +206,17 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     leave = (None if exit_before is None else
              exit_before.reindex(index=prepared["calendar"], columns=prepared["symbols"])
              .fillna(False).to_numpy(dtype=bool))
-    room = prepared["room"].to_numpy(dtype=float) if min_room is not None else None
+    room = (prepared["room"].to_numpy(dtype=float)
+            if min_room is not None or exit_buffer is not None else None)
+
+    def trend_broke(day_position, col):
+        """Has this holding's trend broken on this close (by the chosen exit rule)?"""
+        if exit_buffer is not None:
+            return bool(room[day_position, col] < -exit_buffer)
+        if exit_confirm and exit_confirm > 1:
+            first = day_position - exit_confirm + 1
+            return first >= 0 and not in_trend[first:day_position + 1, col].any()
+        return not in_trend[day_position, col]
     fast_trend = (prepared["in_trend_fast"].to_numpy(dtype=bool)
                   if profit_trail and profit_trail.get("fast") else None)
 
@@ -328,7 +342,7 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
                 sell(symbol, day, "profit trail")
             elif locked and fast_trend is not None and not fast_trend[yesterday, column[symbol]]:
                 sell(symbol, day, "profit trail")
-            elif trend_exit and not in_trend[yesterday, column[symbol]]:
+            elif trend_exit and trend_broke(yesterday, column[symbol]):
                 sell(symbol, day, "trend broke")
             elif leave is not None and leave[yesterday, column[symbol]]:
                 sell(symbol, day, "sold before results")
@@ -378,7 +392,7 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
                         continue
                     if industry_full(symbol):
                         continue
-                    if room is not None and not room[yesterday, column[symbol]] >= min_room:
+                    if min_room is not None and not room[yesterday, column[symbol]] >= min_room:
                         skipped["room"] += 1
                         continue
                     if spike is not None and spike[yesterday, column[symbol]] > max_spike:

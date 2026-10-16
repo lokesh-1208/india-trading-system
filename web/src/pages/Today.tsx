@@ -43,10 +43,14 @@ function HoldCard({ row, quote }: { row: Holding; quote?: LivePrice }) {
         <div className="line1">
           <span className="symbol">{row.symbol}</span><Tag tone={tone}>{label}</Tag>
           {row.weakest ? <Tag tone="down">Among the weakest scores</Tag> : null}
+          {row.warning ? <Tag tone="down">Warning: 1 close below the line</Tag> : null}
         </div>
         <span className="small muted">{row.quantity} shares at ₹{price(row.buy_price)} · bought {day(row.bought)}</span>
         {row.action === "SELL" ? <span className="small down">{row.reason}: sell at tomorrow's open</span> : null}
-        {nearLine ? <span className="small down">Live price is below the sell line. The rule decides at the close: sell tomorrow only if it closes below ₹{price(row.exit_line)}.</span> : null}
+        {row.warning ? <span className="small down">{row.reason}.</span> : null}
+        {nearLine ? <span className="small down">{row.warning
+          ? `Live price is below the sell line again. If today's close is below ₹${price(row.exit_line)}, sell at tomorrow's open.`
+          : `Live price is below the sell line. The rule decides at the close: it sells only after two closes in a row below ₹${price(row.exit_line)}.`}</span> : null}
       </div>
       <div className="mid facts">
         <span className="muted">Sell if it closes below</span><span className="num">₹{price(row.exit_line)}</span>
@@ -343,6 +347,9 @@ export default function TodayPage() {
                       <div className="end">
                         <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>{item.shares} shares</span>
                         <span className="small muted">about {rupees(item.amount)}</span>
+                        {item.size_share !== undefined && item.size_share < 0.99 ? (
+                          <span className="small muted" title="Risk sizing: a jumpy stock gets a smaller amount, so a normal swing costs about 1% of your money">
+                            {Math.round(item.size_share * 100)}% of a full place (jumpy stock)</span>) : null}
                         <LiveNote quote={now} />
                       </div>
                     </Link>

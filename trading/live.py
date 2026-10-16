@@ -31,9 +31,10 @@ _lock = threading.Lock()
 
 
 def market_open(now=None):
-    """True on weekdays from 9:15 am to 3:30 pm India time (holidays are not known)."""
+    """True on trading days from 9:15 am to 3:30 pm India time (NSE holidays skipped)."""
+    from trading import holidays
     now = now or datetime.now(INDIA)
-    if now.weekday() >= 5:
+    if not holidays.is_trading_day(now.date()):
         return False
     minutes = now.hour * 60 + now.minute
     return 9 * 60 + 15 <= minutes <= 15 * 60 + 30

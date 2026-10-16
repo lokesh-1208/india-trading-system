@@ -81,17 +81,19 @@ def warm_up():
             pass                       # the page shows its own error when opened
 
 
-def missing_flow_days(flow_days, trading_days):
-    """Trading days since the first saved FII/DII day that have no figures.
+def missing_flow_days(flow_days, trading_days, recent=None):
+    """Recent trading days (the last `recent`) since the first saved FII/DII day with no figures.
 
-    NSE only gives the latest day, so a day the update did not run is lost.
+    NSE only gives the latest day, so a day the update did not run is lost for good.
+    Older misses are dropped from the warning: nothing can be done about them.
     """
+    recent = config.FLOW_MISS_WARN_DAYS if recent is None else recent
     flow_days = set(pd.to_datetime(list(flow_days)).normalize())
     if not flow_days:
         return []
     first = min(flow_days)
-    return [day for day in pd.to_datetime(list(trading_days)).normalize()
-            if day >= first and day not in flow_days]
+    days = list(pd.to_datetime(list(trading_days)).normalize())[-recent:]
+    return [day for day in days if day >= first and day not in flow_days]
 
 
 def status():

@@ -13,7 +13,7 @@ test.describe("Today page", () => {
       await expect(page.getByRole("link", { name: `${item.symbol}: ${item.tag}` })).toBeVisible();
     }
     await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toBeVisible();
-    await page.getByText("This week's list", { exact: true }).click();
+    await page.getByRole("tab", { name: /Week tracker/ }).click();
     await expect(page.locator("#week table")).toContainText("Missed");
     await expect(page.getByTestId("next-list")).toContainText("Fri, 9 Oct");
     await expect(page.getByTestId("market-checks")).toContainText("1 more not known yet");
@@ -29,7 +29,7 @@ test.describe("Today page", () => {
     await expect(chennpetro).toContainText("do not chase");
     await expect(page.getByRole("link", { name: "KOTAKBANK: Buy" })).toContainText("In range now");
     await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toContainText("live ₹106.00");
-    await page.getByText("This week's list", { exact: true }).click();
+    await page.getByRole("tab", { name: /Week tracker/ }).click();
     await expect(page.locator("#week table")).toContainText("back in range");
   });
 
@@ -38,7 +38,7 @@ test.describe("Today page", () => {
     await page.goto("/");
     const plan = page.getByTestId("money-plan");
     await expect(plan).toContainText("Put in now: ₹28,501");
-    await expect(plan).toContainText("CHENNPETRO 9 shares");
+    await expect(page.getByTestId("order-CHENNPETRO").getByRole("cell").nth(1)).toHaveText("9");
     await expect(plan).toContainText("Keep ₹15,059 for the 1 empty place");
   });
 
@@ -124,4 +124,29 @@ test("after Monday the page says no buys until the next list, and warns about si
   await expect(page.locator("#buy")).toContainText("No buys until Mon, 19 Oct");
   await expect(page.getByTestId("money-warning")).toContainText("more than your trading money");
   await expect(page.getByTestId("oversized")).toContainText("3.0× today's place size");
+});
+
+
+test("best by sector is a grid of sector cards; a card opens the full list in a side panel", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  const today = fixture("today");
+  // The buy cards come first; the sector list does not push them down.
+  await expect(page.getByRole("tab", { name: /This week's buys/ })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: /Best by sector/ }).click();
+  const first = today.sectors[0];
+  await page.getByRole("button", { name: new RegExp(`^${first.industry}:`) }).click();
+  const panel = page.getByRole("dialog", { name: first.industry });
+  await expect(panel).toBeVisible();
+  await expect(panel.locator("table")).toContainText(first.stocks[0].symbol);
+  await page.keyboard.press("Escape");
+  await expect(panel).toHaveCount(0);
+});
+
+test("your stocks show how far each one is above its exit line", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  const row = page.getByRole("link", { name: "TESTCO: Hold" });
+  await expect(row).toContainText("Exit line");
+  await expect(row).toContainText(/% (above|below)/);
 });

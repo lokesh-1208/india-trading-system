@@ -1,5 +1,5 @@
 // Small building blocks shared by the pages.
-import { ReactNode } from "react";
+import { ReactNode, useEffect } from "react";
 import { Ladder as LadderShape } from "../api";
 import { price } from "../format";
 
@@ -120,6 +120,56 @@ export function Bars({ items }: { items: { name: string; value: number }[] }) {
           <span className="num" style={{ textAlign: "right" }}>{Math.round(item.value)}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Tabs: one panel shown at a time, so long lists do not push the page down. */
+export function Tabs({ tabs, active, onChange, label }: {
+  tabs: { id: string; label: ReactNode; count?: number }[]; active: string;
+  onChange: (id: string) => void; label: string;
+}) {
+  return (
+    <div className="tabs" role="tablist" aria-label={label}>
+      {tabs.map((tab) => (
+        <button key={tab.id} type="button" role="tab" id={`tab-${tab.id}`} aria-selected={tab.id === active}
+          aria-controls={`panel-${tab.id}`} className={tab.id === active ? "on" : ""}
+          onClick={() => onChange(tab.id)}>
+          {tab.label}{tab.count !== undefined ? <span className="count">{tab.count}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A panel that slides in from the right; Escape or the backdrop closes it. */
+export function Drawer({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [onClose]);
+  return (
+    <div className="drawer-wrap">
+      <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
+      <aside className="drawer" role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : "Details"}>
+        <div className="drawer-head">
+          <h3>{title}</h3>
+          <button type="button" className="small" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="drawer-body">{children}</div>
+      </aside>
+    </div>
+  );
+}
+
+/** One small number with its name, for a row of key figures. */
+export function Stat({ name, value, note, tone }: { name: ReactNode; value: ReactNode; note?: ReactNode; tone?: string }) {
+  return (
+    <div className="stat">
+      <span className="name">{name}</span>
+      <span className={`value num ${tone ?? ""}`}>{value}</span>
+      {note ? <span className="note">{note}</span> : null}
     </div>
   );
 }

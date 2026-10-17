@@ -1,15 +1,19 @@
 // Today: what to buy and what to hold or sell. The one page to act from.
 // Context (before the open, news, movers, market health) lives on the Market page.
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { BeforeOpen, Holding, LivePrice, MoneyPlan, Movers, Sector, Today, WeekRow, useApi } from "../api";
+import { BeforeOpen, Holding, LivePrice, MoneyPlan, Movers, Sector, SectorStock, Today, WeekRow, useApi } from "../api";
 import { useApp } from "../App";
-import { Empty, Ladder, Loading, Panel, Problem, Section, Tag } from "../components/ui";
+import { Drawer, Empty, Ladder, Loading, Panel, Problem, Stat, Tabs, Tag } from "../components/ui";
 import { clock, LiveNote, useLive } from "../components/live";
 import { day, dateTime, pct, price, rupees, signedRupees } from "../format";
 
 function savedMoney() {
   try { return Number(localStorage.getItem("kasauti-money")) || 100000; } catch { return 100000; }
+}
+
+function savedTab() {
+  try { return localStorage.getItem("kasauti-today-tab") || "buy"; } catch { return "buy"; }
 }
 
 // Before 9:15 am on a weekday (this computer's clock, India time).
@@ -30,92 +34,104 @@ function holdingDay(bought: string, today = new Date()) {
   return Math.max(count, 1);
 }
 
-function HoldCard({ row, quote }: { row: Holding; quote?: LivePrice }) {
+// One holding on one line: where it is now, and how far it is from its exit.
+function HoldRow({ row, quote }: { row: Holding; quote?: LivePrice }) {
   const now = quote?.price ?? row.last_price;
   const gainPct = quote ? (quote.price / row.buy_price - 1) * 100 : row["gain_%"];
   const gainRs = quote ? (quote.price - row.buy_price) * row.quantity : row.gain_rs;
   const tone = row.action === "SELL" ? "down" : row.action === "WAIT" ? "plain" : "up";
   const label = row.action === "SELL" ? "Sell" : row.action === "WAIT" ? "Bought today" : "Hold";
-  const nearLine = quote && row.action === "HOLD" && quote.price < row.exit_line;
+  const room = row.exit_line ? (now / row.exit_line - 1) * 100 : null;
+  const belowLine = room !== null && room < 0;
+  const roomTone = room === null ? "" : room < 0 ? "down" : room < 2 ? "warn" : "up";
   return (
-    <Link to={`/stocks/${row.symbol}`} className="card" aria-label={`${row.symbol}: ${label}`}>
-      <div className="who">
+    <Link to={`/stocks/${row.symbol}`} className={`hold-row ${row.action === "SELL" ? "is-sell" : ""}`}
+      aria-label={`${row.symbol}: ${label}`}>
+      <div className="h-who">
         <div className="line1">
           <span className="symbol">{row.symbol}</span><Tag tone={tone}>{label}</Tag>
-          {row.weakest ? <Tag tone="down">Among the weakest scores</Tag> : null}
-          {row.warning ? <Tag tone="down">Warning: 1 close below the line</Tag> : null}
+          {row.warning ? <Tag tone="warn">1 close below the line</Tag> : null}
+          {row.weakest ? <Tag tone="down">Weakest scores</Tag> : null}
         </div>
-        <span className="small muted">{row.quantity} shares at ₹{price(row.buy_price)} · bought {day(row.bought)}</span>
-        {row.action === "SELL" ? <span className="small down">{row.reason}: sell at tomorrow's open</span> : null}
-        {row.warning ? <span className="small down">{row.reason}.</span> : null}
-        {nearLine ? <span className="small down">{row.warning
-          ? `Live price is below the sell line again. If today's close is below ₹${price(row.exit_line)}, sell at tomorrow's open.`
-          : `Live price is below the sell line. The rule decides at the close: it sells only after two closes in a row below ₹${price(row.exit_line)}.`}</span> : null}
+        <span className="small muted">{row.quantity} @ ₹{price(row.buy_price)} · day {holdingDay(row.bought)}
+          {row.industry ? ` · ${row.industry}` : ""}</span>
       </div>
-      <div className="mid facts">
-        <span className="muted">Sell if it closes below</span><span className="num">₹{price(row.exit_line)}</span>
-        <span className="muted">GTT stop-loss in Kite</span><span className="num">₹{price(row.gtt)}</span>
-        {row.trail_from ? (
-          <>
-            <span className="muted">{row.trail_active ? "Profit trail on: high" : "Profit trail starts at"}</span>
-            <span className={`num ${row.trail_active ? "up" : ""}`}>₹{price(row.trail_active ? row.peak : row.trail_from)}</span>
-          </>
-        ) : null}
-        <span className="muted">{row.exit_pct > 0 ? "Profit locked in" : "If it exits there"}</span>
-        <span className={`num ${row.exit_pct > 0 ? "up" : "down"}`}>{pct(row.exit_pct)} ({signedRupees(row.exit_rs)})</span>
-      </div>
-      <div className="end">
-        <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>
-          {quote ? <span className="small muted" style={{ fontWeight: 400 }}>live </span> : null}₹{price(now)}
-        </span>
-        {row.action === "WAIT" && !quote ? <span className="small muted">checked after today's close</span> : (
-          <span className={`num ${(gainPct ?? 0) >= 0 ? "up" : "down"}`} style={{ fontSize: 13 }}>
-            {pct(gainPct)}  {signedRupees(gainRs)}
-          </span>
+      <div className="h-now">
+        <span className="num strong">{quote ? <span className="small muted live-word">live </span> : null}₹{price(now)}</span>
+        {row.action === "WAIT" && !quote ? <span className="small muted">checked after the close</span> : (
+          <span className={`num small ${(gainPct ?? 0) >= 0 ? "up" : "down"}`}>{pct(gainPct)} · {signedRupees(gainRs)}</span>
         )}
-        <span className="small muted">day {holdingDay(row.bought)} of holding</span>
-        {row.size_vs_plan != null && row.size_vs_plan > 1.5 ? (
-          <span className="small down" style={{ fontWeight: 600 }} data-testid="oversized">
-            {row.size_vs_plan.toFixed(1)}× today's place size: bigger than the plan
-          </span>
-        ) : null}
-        {row.size_vs_plan != null && row.size_vs_plan < 0.8 ? (
-          <span className="small muted" title="The model never adds to a holding; this is for information.">
-            {Math.round(row.size_vs_plan * 100)}% of today's place size
-          </span>
-        ) : null}
       </div>
+      <div className="h-exit">
+        <span className="small muted" title="Sell after two closes in a row below this line">Exit line</span>
+        <span className="num">₹{price(row.exit_line)}
+          {room !== null ? <span className={`gap-chip ${roomTone}`}>{room >= 0 ? `${room.toFixed(1)}% above` : `${Math.abs(room).toFixed(1)}% below`}</span> : null}
+        </span>
+      </div>
+      <div className="h-stop">
+        <span className="small muted">GTT stop</span>
+        <span className="num">₹{price(row.gtt)}</span>
+        <span className={`small num ${row.exit_pct > 0 ? "up" : "down"}`}>{row.exit_pct > 0 ? "locks " : "risk "}{pct(row.exit_pct)}</span>
+      </div>
+      {row.action === "SELL" || row.warning || (belowLine && row.action === "HOLD") || (row.size_vs_plan != null && row.size_vs_plan > 1.5) ? (
+        <div className="h-note">
+          {row.action === "SELL" ? <span className="small down">{row.reason}: sell at tomorrow's open.</span> : null}
+          {row.warning ? <span className="small warn-text">{row.reason}. If the next close is below ₹{price(row.exit_line)} too, it is a sell.</span> : null}
+          {belowLine && row.action === "HOLD" && quote ? <span className="small down">{row.warning
+            ? `Live price is below the sell line again. If today's close is below ₹${price(row.exit_line)}, sell at tomorrow's open.`
+            : `Live price is below the sell line. The rule decides at the close: it sells only after two closes in a row below ₹${price(row.exit_line)}.`}</span> : null}
+          {row.size_vs_plan != null && row.size_vs_plan > 1.5 ? (
+            <span className="small down strong" data-testid="oversized">{row.size_vs_plan.toFixed(1)}× today's place size: bigger than the plan</span>
+          ) : null}
+        </div>
+      ) : null}
     </Link>
   );
 }
 
-// How much to put in now, from the money you actually have (the backtest's own sizing rule).
-function MoneyPlanPanel({ plan }: { plan: MoneyPlan }) {
+// The orders to place, from the money you actually have (the backtest's own sizing rule).
+function OrdersPanel({ plan, quote }: { plan: MoneyPlan; quote: (s: string) => LivePrice | undefined }) {
+  const [copied, setCopied] = useState(false);
+  const text = plan.buys.map((item) => `${item.symbol}  BUY  ${item.shares}  LIMIT ${item.limit.toFixed(2)}`).join("\n");
+  const copy = () => {
+    navigator.clipboard?.writeText(text).then(() => { setCopied(true); window.setTimeout(() => setCopied(false), 2000); })
+      .catch(() => setCopied(false));
+  };
   return (
-    <div className="panel money" data-testid="money-plan">
-      <div className="grid-tiles">
-        <div className="tile"><span className="name">Your trading money</span>
-          <span className="value num">{rupees(plan.account)}</span>
-          <span className="note">{rupees(plan.capital)} set aside{plan.account !== plan.capital ? ", with gains and losses" : ""}</span></div>
-        <div className="tile"><span className="name">In stocks</span>
-          <span className="value num">{rupees(plan.holdings_value)}</span>
-          <span className="note">cost {rupees(plan.invested)}</span></div>
-        <div className="tile"><span className="name">Cash free</span>
-          <span className="value num">{rupees(plan.cash)}</span>
-          <span className="note">{plan.places} of 5 places free</span></div>
-        <div className="tile"><span className="name">Per stock now</span>
-          <span className="value num">{rupees(plan.per_stock)}</span>
-          <span className="note">{plan.share < 1 ? `${Math.round(plan.share * 100)}% of a full place (caution)` : "a full place"}</span></div>
+    <section className="panel orders" data-testid="money-plan" aria-label="Today's orders">
+      <div className="section-head">
+        <h2>{plan.buys.length ? <>Put in now: {rupees(plan.spend)}</> : "No orders today"}</h2>
+        {plan.buys.length ? (
+          <button type="button" className="small" onClick={copy}>{copied ? "Copied" : "Copy orders"}</button>
+        ) : null}
       </div>
       {plan.buys.length ? (
-        <p style={{ margin: 0 }}>
-          <strong>Put in now: {rupees(plan.spend)}</strong>{" "}
-          <span className="muted">({plan.buys.map((item) => `${item.symbol} ${item.shares} shares at up to ₹${price(item.limit)}`).join(" · ")})</span>
-        </p>
+        <div className="table-wrap">
+          <table className="order-table">
+            <thead><tr><th>Stock</th><th className="right">Shares</th><th className="right">AMO limit</th>
+              <th className="right">Amount</th><th className="right">Now</th></tr></thead>
+            <tbody>
+              {plan.buys.map((item) => {
+                const now = quote(item.symbol);
+                const above = now !== undefined && now.price > item.limit;
+                return (
+                  <tr key={item.symbol} data-testid={`order-${item.symbol}`}>
+                    <td><Link to={`/stocks/${item.symbol}`} className="strong-link">{item.symbol}</Link></td>
+                    <td className="right num strong">{item.shares}</td>
+                    <td className="right num">₹{price(item.limit)}</td>
+                    <td className="right num">{rupees(item.amount)}</td>
+                    <td className="right num">{now ? <><span className={above ? "warn-text" : "up"}>₹{price(now.price)}</span>
+                      <div className="small muted">{above ? "above limit" : "in range"}</div></> : <span className="muted">–</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       ) : null}
-      <p className="small muted" style={{ margin: 0 }}>{plan.note}</p>
-      {plan.warning ? <p className="small down" style={{ margin: 0, fontWeight: 600 }} data-testid="money-warning">{plan.warning}</p> : null}
-    </div>
+      <p className="small muted">{plan.note}</p>
+      {plan.warning ? <p className="small down strong" data-testid="money-warning">{plan.warning}</p> : null}
+    </section>
   );
 }
 
@@ -238,19 +254,24 @@ function WeekTable({ rows, days, quote, liveTime }: {
 // The weekly list by sector: the top 10 plus the best of every other sector, so money can
 // be spread across sectors. Buying a sector pick is your own choice: the backtest only
 // tested buying from the top 10.
-function SectorTable({ sectors, quote, stopPct, perSector, minScore }: {
+function SectorTable({ sectors, quote, stopPct, perSector, minScore, single = false }: {
   sectors: Sector[]; quote: (s: string) => LivePrice | undefined; stopPct: number;
-  perSector: number; minScore: number;
+  perSector: number; minScore: number; single?: boolean;
 }) {
   const extra = sectors.reduce((count, sector) => count + sector.stocks.filter((s) => s.group === "sector").length, 0);
   return (
     <div className="table-wrap">
-      <p className="small muted" style={{ margin: "0 14px 10px" }}>
+      {single ? (
+        <p className="small muted" style={{ margin: "0 14px 10px" }}>
+          {sectors[0].stocks.length} on this week's list{sectors[0].in_top ? `, ${sectors[0].in_top} of them in the top 10` : ""}.
+          Same limit (+2% over the list close) and stop (−{Math.round(stopPct * 100)}%) as the top 10.
+        </p>
+      ) : <p className="small muted" style={{ margin: "0 14px 10px" }}>
         {sectors.length} sectors · the top 10 plus {extra} sector picks: the best {perSector} of each sector
         (score {minScore}+, above the 20-day average, no results due). Same limit (+2% over the list close)
         and stop (−{Math.round(stopPct * 100)}%) as the top 10. Sector picks were not part of the
         backtest, so how much goes into each is your call.
-      </p>
+      </p>}
       <table className="week-table sector-table">
         <thead>
           <tr>
@@ -264,13 +285,13 @@ function SectorTable({ sectors, quote, stopPct, perSector, minScore }: {
         </thead>
         {sectors.map((sector) => (
           <tbody key={sector.industry}>
-            <tr className="sector-head">
+            {single ? null : <tr className="sector-head">
               <td colSpan={6}>
                 <strong>{sector.industry}</strong>{" "}
                 <span className="small muted">· {sector.stocks.length} stock{sector.stocks.length !== 1 ? "s" : ""}
                   {sector.in_top ? ` · ${sector.in_top} in the top 10` : ""}</span>
               </td>
-            </tr>
+            </tr>}
             {sector.stocks.map((stock) => {
               const now = quote(stock.symbol);
               const buyable = stock.status === "Buy" || stock.status === "Monday only";
@@ -309,15 +330,101 @@ function SectorTable({ sectors, quote, stopPct, perSector, minScore }: {
   );
 }
 
+// How a stock on the sector list stands today, in two or three words.
+function sectorState(stock: SectorStock, now?: LivePrice): [string, string] {
+  const buyable = stock.status === "Buy" || stock.status === "Monday only";
+  if (buyable && now) return now.price > stock.ladder.limit ? ["Above limit", "warn"] : ["In range", "up"];
+  if (stock.status === "Buy") return ["In range", "up"];
+  return [stock.status, STATUS_TONE[stock.status] ?? "plain"];
+}
+
+// Every sector on one screen: a small card each, the full list in a side panel on click.
+function SectorGrid({ sectors, holds, quote, stopPct, perSector, minScore }: {
+  sectors: Sector[]; holds: Holding[]; quote: (s: string) => LivePrice | undefined; stopPct: number;
+  perSector: number; minScore: number;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+  const close = useCallback(() => setOpen(null), []);
+  const heldBy = new Map<string, string[]>();
+  holds.forEach((row) => {
+    const name = row.industry || "Other";
+    heldBy.set(name, [...(heldBy.get(name) ?? []), row.symbol]);
+  });
+  const chosen = sectors.find((sector) => sector.industry === open);
+  return (
+    <>
+      {heldBy.size ? (
+        <div className="held-spread" data-testid="held-spread">
+          <span className="small muted">Your money by sector:</span>
+          {Array.from(heldBy.entries()).map(([name, symbols]) => (
+            <span key={name} className="chip">{name} <strong>{symbols.length}</strong></span>
+          ))}
+        </div>
+      ) : null}
+      <div className="sector-grid">
+        {sectors.map((sector) => {
+          const held = heldBy.get(sector.industry) ?? [];
+          const best = sector.stocks[0];
+          return (
+            <button key={sector.industry} type="button" className={`sector-card ${held.length ? "held" : ""}`}
+              onClick={() => setOpen(sector.industry)} aria-label={`${sector.industry}: ${sector.stocks.length} stocks`}>
+              <div className="sc-head">
+                <span className="sc-name">{sector.industry}</span>
+                <span className="sc-count num">{sector.stocks.length}</span>
+              </div>
+              <div className="sc-badges">
+                {sector.in_top ? <Tag tone="blue">{sector.in_top} in top 10</Tag> : null}
+                {held.length ? <Tag tone="up">You hold {held.length}</Tag> : null}
+              </div>
+              <ul className="sc-list">
+                {sector.stocks.slice(0, 3).map((stock) => {
+                  const [text, tone] = sectorState(stock, quote(stock.symbol));
+                  return (
+                    <li key={stock.symbol}>
+                      <span className="sc-sym">{stock.symbol}</span>
+                      <span className="num small muted">{Math.round(stock.score)}</span>
+                      <span className={`dot-label ${tone}`}>{text}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <span className="sc-more small muted">
+                {sector.stocks.length > 3 ? `+${sector.stocks.length - 3} more · ` : ""}best {best ? best.symbol : "–"} · open ›
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="small muted">
+        The best {perSector} of each sector (score {minScore}+, above the 20-day average, no results due), same +2% limit
+        and −{Math.round(stopPct * 100)}% stop as the top 10. Sector picks were not part of the backtest, so buying them is your call.
+      </p>
+      {chosen ? (
+        <Drawer title={chosen.industry} onClose={close}>
+          <SectorTable sectors={[chosen]} quote={quote} stopPct={stopPct} perSector={perSector} minScore={minScore} single />
+        </Drawer>
+      ) : null}
+    </>
+  );
+}
+
 function countBy(rows: WeekRow[]) {
   const counts = new Map<string, number>();
   rows.forEach((row) => counts.set(row.status, (counts.get(row.status) ?? 0) + 1));
   return Array.from(counts.entries()).map(([status, count]) => `${count} ${status.toLowerCase()}`).join(" · ");
 }
 
+// The short reason behind a caution or weak market, without repeating the check count.
+function marketReason(note: string, ok: boolean) {
+  if (!ok) return "Too few checks pass: no new buys.";
+  return /200-day/.test(note) && /below/.test(note) ? "Nifty is below its 200-day average: smaller amounts, or wait."
+    : "Consider smaller amounts or waiting.";
+}
+
 export default function TodayPage() {
   const { version, status, startJob, job } = useApp();
   const [money, setMoney] = useState(savedMoney);
+  const [tab, setTab] = useState(savedTab);
   const { data, error, reload } = useApi<Today>(`/api/today?money=${money}`, version);
   const symbols = useMemo(() => data
     ? Array.from(new Set([...data.holds.map((row) => row.symbol), ...data.week_list.map((row) => row.symbol),
@@ -330,40 +437,59 @@ export default function TodayPage() {
     setMoney(value);
     try { localStorage.setItem("kasauti-money", String(value)); } catch { /* private window */ }
   };
+  const changeTab = (value: string) => {
+    setTab(value);
+    try { localStorage.setItem("kasauti-today-tab", value); } catch { /* private window */ }
+  };
 
   if (error) return <Problem error={error} retry={reload} />;
   if (!data) return <Loading count={4} height={110} />;
   const market = data.market;
   const caution = market.level !== "strong";
   const morning = beforeOpen();
+  const plan = data.money_plan;
+  const level = !market.ok ? "weak" : caution ? "caution" : "strong";
+  const sectors = data.sectors ?? [];
+  const tabs = [
+    { id: "buy", label: "This week's buys", count: data.buys.length },
+    ...(sectors.length ? [{ id: "sectors", label: "Best by sector", count: sectors.length }] : []),
+    ...(data.week_list.length ? [{ id: "week", label: "Week tracker", count: data.week_list.length }] : []),
+  ];
+  const shown = tabs.some((item) => item.id === tab) ? tab : "buy";
 
   return (
     <>
-      <section className="panel hero-one" aria-label="Today's plan">
-        <div className="left">
+      <section className={`panel hero-plan level-${level}`} aria-label="Today's plan">
+        <div className="hp-main">
           <span className="eyebrow">For {day(data.list_day)} · from the {day(data.signal_day)} close</span>
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "6px 20px" }}>
+          <div className="hp-title">
             <h1>{data.headline}</h1>
-            {data.nothing_to_sell ? <span className="muted">Nothing to sell today</span> : null}
+            {data.nothing_to_sell ? <span className="chip quiet">Nothing to sell</span> : null}
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-            <Tag tone={!market.ok ? "down" : caution ? "warn" : "up"}>
-              Market: {!market.ok ? "weak" : caution ? "caution" : "strong"}
-            </Tag>
-            <span className="small muted" data-testid="market-checks">
+          <div className="hp-market" title={market.note}>
+            <Tag tone={!market.ok ? "down" : caution ? "warn" : "up"}>Market: {level}</Tag>
+            <span className="small" data-testid="market-checks">
               {market.checks_pass} of {market.checks_total} market checks pass
-              {market.checks_unknown.length ? ` (${market.checks_unknown.length} more not known yet)` : ""}.{" "}
-              {market.share < 1
-                ? `Each buy uses ${Math.round(market.share * 100)}%: about ${rupees(market.per_stock)} instead of ${rupees(market.per_stock / market.share)}.`
-                : `Each buy uses about ${rupees(market.per_stock)}.`}
+              {market.checks_unknown.length ? ` (${market.checks_unknown.length} more not known yet)` : ""}
             </span>
+            {caution ? <span className="small muted">· {marketReason(market.note, market.ok)}</span> : null}
           </div>
-          {caution ? <p className="small muted">{market.note}</p> : null}
+          <div className="stat-row">
+            <Stat name="Trading money" value={rupees(plan.account)}
+              note={plan.account !== plan.capital ? `${rupees(plan.capital)} set aside` : "set aside"} />
+            <Stat name="In stocks" value={rupees(plan.holdings_value)} note={`cost ${rupees(plan.invested)}`} />
+            <Stat name="Cash free" value={rupees(plan.cash)} note={`${plan.places} of ${market.positions} places free`} />
+            <Stat name="Per stock now" value={rupees(plan.per_stock)}
+              note={plan.share < 1 ? `${Math.round(plan.share * 100)}% of ${rupees(plan.per_stock / plan.share)}` : "a full place"}
+              tone={plan.share < 1 ? "warn-text" : ""} />
+            {plan.buys.length ? <Stat name="Stays as cash" value={rupees(plan.cash_after)}
+              note={plan.open_places_after ? `${plan.open_places_after} place${plan.open_places_after > 1 ? "s" : ""} still free` : "all places full"} /> : null}
+          </div>
           <p className="small muted" data-testid="next-list">
             This week's list was made from the {day(data.list_from)} close. Next list: {day(data.next_list)}, from the Friday close.
           </p>
         </div>
-        <div className="right">
+        <div className="hp-side">
           <span className="small">{status?.text ?? "…"}</span>
           {status?.missed_flow_days?.length ? (
             <span className="small warn-text" data-testid="missed-days">
@@ -375,11 +501,9 @@ export default function TodayPage() {
             <input type="number" min={10000} step={5000} value={money}
               onChange={(event) => changeMoney(Number(event.target.value) || 100000)} />
           </label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            <button className="primary" style={{ flex: "1 1 120px" }} disabled={!!job?.running}
-              onClick={() => startJob("daily")}>Update data</button>
-            <button style={{ flex: "1 1 120px" }} disabled={!!job?.running}
-              onClick={() => startJob("premarket")}>Refresh before open</button>
+          <div className="hp-buttons">
+            <button className="primary" disabled={!!job?.running} onClick={() => startJob("daily")}>Update data</button>
+            <button disabled={!!job?.running} onClick={() => startJob("premarket")}>Refresh before open</button>
           </div>
           {status?.updated ? <span className="small muted">Updated {dateTime(status.updated)} · daily 6:30 pm, before-open 9:10 am</span> : null}
         </div>
@@ -387,90 +511,103 @@ export default function TodayPage() {
 
       <div className="row">
         <div className="main-col">
-          <Section title="Buy from this week's list" id="buy"
-            aside={`Limits from the ${day(data.list_from)} close. Place an AMO limit order at the limit.`}>
-            {data.explain ? <p className="small muted" data-testid="list-explain" style={{ marginTop: 0 }}>{data.explain}</p> : null}
-            {market.ok ? <MoneyPlanPanel plan={data.money_plan} /> : null}
-            <p className="small muted" data-testid="live-status" style={{ marginTop: 0 }}>
+          <div className="duo">
+            {market.ok ? <OrdersPanel plan={plan} quote={quote} /> : (
+              <section className="panel orders" aria-label="Today's orders">
+                <h2>No orders today</h2>
+                <p className="small muted">The market is weak, so the model buys nothing today.</p>
+              </section>
+            )}
+            <section className="panel mine" id="mine" aria-labelledby="mine-title">
+              <div className="section-head">
+                <h2 id="mine-title">Your stocks</h2>
+                {data.holds.length ? <span className="small muted">stop-loss {Math.round(market.stop_loss * 100)}% under your buy</span> : null}
+              </div>
+              {data.holds.length === 0 ? (
+                <Empty>After you buy, record it under <Link to="/trades">Stocks &amp; trades</Link> and it shows here, marked Hold or Sell each day.</Empty>
+              ) : data.holds.map((row) => <HoldRow key={row.symbol} row={row} quote={quote(row.symbol)} />)}
+            </section>
+          </div>
+
+          <section className="panel list-panel" id="buy" aria-label="This week's list">
+            <div className="list-head">
+              <Tabs tabs={tabs} active={shown} onChange={changeTab} label="This week's list" />
+              <span className="small muted">Limits from the {day(data.list_from)} close · place AMO limit orders</span>
+            </div>
+            {data.explain ? <p className="small muted" data-testid="list-explain">{data.explain}</p> : null}
+            <p className="small muted live-line" data-testid="live-status">
               {liveFailed && !live ? "Live prices could not be fetched; showing the last close."
                 : !live ? "Getting live prices…"
                   : live.market_open ? `Live prices, updated every minute (last at ${clock(live.time)}). The model still decides from the close.`
                     : "Market is closed: prices shown are the last traded ones."}
             </p>
-            {!market.ok ? <Empty>The market is weak, so the model buys nothing today.</Empty>
-              : data.buys.length === 0 ? (data.buy_window && !data.buy_window.open
-                ? <Empty>No buys until {day(data.buy_window.next)}. The tested model buys only at the first open of the week; buying the week's picks on later days made results worse.</Empty>
-                : <Empty>Nothing on this week's list is buyable today.</Empty>)
-                : data.buys.map((item) => {
-                  const now = quote(item.symbol);
-                  const above = now !== undefined && now.price > item.ladder.limit;
-                  return (
-                    <Link key={item.symbol} to={`/stocks/${item.symbol}`} className="card"
-                      aria-label={`${item.symbol}: ${item.tag}`}>
-                      <div className="who">
-                        <div className="line1">
-                          <span className="symbol">{item.symbol}</span>
-                          <Tag tone={item.tag === "Buy" ? "blue" : "plain"}>{item.tag}</Tag>
-                          {now ? <Tag tone={above ? "warn" : "up"}>{above ? "Above limit now" : "In range now"}</Tag> : null}
-                        </div>
-                        <span className="small muted">{item.about}</span>
-                        {above ? <span className="small down">Live price is above the limit ₹{price(item.ladder.limit)}: do not chase. A limit order fills only if it comes back.</span> : null}
-                      </div>
-                      <div className="mid">
-                        <Ladder ladder={now ? { ...item.ladder, last: now.price } : item.ladder} lastLabel={now ? "live" : "last"} />
-                      </div>
-                      <div className="end">
-                        <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>{item.shares} shares</span>
-                        <span className="small muted">about {rupees(item.amount)}</span>
-                        {item.size_share !== undefined && item.size_share < 0.99 ? (
-                          <span className="small muted" title="Risk sizing: a jumpy stock gets a smaller amount, so a normal swing costs about 1% of your money">
-                            {Math.round(item.size_share * 100)}% of a full place (jumpy stock)</span>) : null}
-                        <LiveNote quote={now} />
-                      </div>
-                    </Link>
-                  );
-                })}
-            {data.results_due.length ? (
-              <p className="small muted">Left out because results are due within 5 days:{" "}
-                {data.results_due.map((item) => `${item.symbol} (${day(item.date)})`).join(", ")}.</p>
-            ) : null}
-          </Section>
 
-          {data.sectors?.length ? (
-            <details className="panel tight week" id="sectors" open>
-              <summary>
-                <strong>Best by sector</strong>{" "}
-                <span className="small muted">· this week's list grouped by sector · {data.sectors.length} sectors</span>
-              </summary>
-              <SectorTable sectors={data.sectors} quote={quote} stopPct={market.stop_loss}
-                perSector={data.sector_rules?.per_sector ?? 3} minScore={data.sector_rules?.min_score ?? 50} />
-            </details>
-          ) : null}
-
-          <Section title="Your stocks" id="mine"
-            aside={data.holds.length ? `Stop-loss ${Math.round(market.stop_loss * 100)}% under your buy price` : undefined}>
-            {data.holds.length === 0 ? (
-              <Empty>After you buy, record it under <Link to="/trades">Stocks &amp; trades</Link> and it shows here, marked Hold or Sell each day.</Empty>
-            ) : data.holds.map((row) => <HoldCard key={row.symbol} row={row} quote={quote(row.symbol)} />)}
-          </Section>
-
-          {data.week_list.length ? (
-            <details className="panel tight week" id="week">
-              <summary>
-                <strong>This week's list</strong>{" "}
-                <span className="small muted">· {data.week_list.length} stocks · {countBy(data.week_list)} · ranks each day and move since picked</span>
-              </summary>
-              <WeekTable rows={data.week_list} days={data.week_days} quote={quote} liveTime={live ? clock(live.time) : undefined} />
-              {data.watch.length ? (
-                <p className="small muted" style={{ padding: "0 14px 12px" }}>
-                  New on today's list, not this week's (watch only: buying new picks every day did worse in the tests):{" "}
-                  {data.watch.map((item, index) => (
-                    <span key={item.symbol}>{index ? ", " : ""}<Link to={`/stocks/${item.symbol}`}>{item.symbol}</Link></span>
-                  ))}.
-                </p>
+            <div role="tabpanel" id={`panel-${shown}`} aria-labelledby={`tab-${shown}`}>
+              {shown === "buy" ? (
+                <div className="cards">
+                  {!market.ok ? <Empty>The market is weak, so the model buys nothing today.</Empty>
+                    : data.buys.length === 0 ? (data.buy_window && !data.buy_window.open
+                      ? <Empty>No buys until {day(data.buy_window.next)}. The tested model buys only at the first open of the week; buying the week's picks on later days made results worse.</Empty>
+                      : <Empty>Nothing on this week's list is buyable today.</Empty>)
+                      : data.buys.map((item) => {
+                        const now = quote(item.symbol);
+                        const above = now !== undefined && now.price > item.ladder.limit;
+                        return (
+                          <Link key={item.symbol} to={`/stocks/${item.symbol}`} className={`card ${item.tag === "Buy" ? "is-pick" : ""}`}
+                            aria-label={`${item.symbol}: ${item.tag}`}>
+                            <div className="who">
+                              <div className="line1">
+                                <span className="symbol">{item.symbol}</span>
+                                <Tag tone={item.tag === "Buy" ? "blue" : "plain"}>{item.tag}</Tag>
+                                {now ? <Tag tone={above ? "warn" : "up"}>{above ? "Above limit now" : "In range now"}</Tag> : null}
+                              </div>
+                              <span className="small muted">{item.about}</span>
+                              {above ? <span className="small down">Live price is above the limit ₹{price(item.ladder.limit)}: do not chase. A limit order fills only if it comes back.</span> : null}
+                            </div>
+                            <div className="mid">
+                              <Ladder ladder={now ? { ...item.ladder, last: now.price } : item.ladder} lastLabel={now ? "live" : "last"} />
+                            </div>
+                            <div className="end">
+                              <span className="num strong big">{item.shares} shares</span>
+                              <span className="small muted">about {rupees(item.amount)}</span>
+                              {item.size_share !== undefined && item.size_share < 0.99 ? (
+                                <span className="small muted" title="Risk sizing: a jumpy stock gets a smaller amount, so a normal swing costs about 1% of your money">
+                                  {Math.round(item.size_share * 100)}% of a full place (jumpy stock)</span>) : null}
+                              <LiveNote quote={now} />
+                            </div>
+                          </Link>
+                        );
+                      })}
+                  {data.results_due.length ? (
+                    <p className="small muted">Left out because results are due within 5 days:{" "}
+                      {data.results_due.map((item) => `${item.symbol} (${day(item.date)})`).join(", ")}.</p>
+                  ) : null}
+                </div>
               ) : null}
-            </details>
-          ) : null}
+
+              {shown === "sectors" ? (
+                <div id="sectors">
+                  <SectorGrid sectors={sectors} holds={data.holds} quote={quote} stopPct={market.stop_loss}
+                    perSector={data.sector_rules?.per_sector ?? 3} minScore={data.sector_rules?.min_score ?? 50} />
+                </div>
+              ) : null}
+
+              {shown === "week" ? (
+                <div id="week">
+                  <p className="small muted">{data.week_list.length} stocks · {countBy(data.week_list)} · rank each day and move since picked</p>
+                  <WeekTable rows={data.week_list} days={data.week_days} quote={quote} liveTime={live ? clock(live.time) : undefined} />
+                  {data.watch.length ? (
+                    <p className="small muted">
+                      New on today's list, not this week's (watch only: buying new picks every day did worse in the tests):{" "}
+                      {data.watch.map((item, index) => (
+                        <span key={item.symbol}>{index ? ", " : ""}<Link to={`/stocks/${item.symbol}`}>{item.symbol}</Link></span>
+                      ))}.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </section>
         </div>
 
         <aside className="side-col" aria-label="Context">

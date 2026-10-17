@@ -5,6 +5,7 @@ The pages' contents are replaced by small stand-ins, so these tests need no data
 
 import time
 
+import numpy as np
 import pandas as pd  # noqa: F401  (load pandas before FastAPI)
 import pytest
 from fastapi.testclient import TestClient
@@ -97,10 +98,33 @@ def test_list_summary_says_why_the_buy_section_is_short():
     text = views.list_summary(table, 3, True)
     assert text.startswith("This week's list has 8 stocks: you already hold 2; 3 ran more")
     assert "1 closed below the 20-day average" in text
-    assert text.endswith("2 can be bought today, with room for 3 new stocks.")
+    assert text.endswith("2 in range, room for 3 new stocks (2 places taken).")
     assert views.list_summary(table, 3, False).endswith("nothing is bought today.")
     assert views.list_summary(pd.DataFrame({"status": ["Missed"]}), 3, True).endswith(
         "None of them can be bought today.")
+
+
+def test_list_summary_names_picks_and_backups_when_more_are_in_range_than_places():
+    table = pd.DataFrame({"status": ["You hold", "You hold"] + ["Buy"] * 8})
+    text = views.list_summary(table, 3, True)
+    assert text.endswith("8 in range, room for 3 new stocks (2 places taken): the top 3 are "
+                         "the picks, the other 5 are backups.")
+    assert views.list_summary(table, 0, True).endswith("8 are in range, but all places are full.")
+
+
+def test_check_details_give_the_number_behind_each_market_check(monkeypatch):
+    days = pd.bdate_range("2025-01-01", periods=260)
+    rising = pd.DataFrame({"Close": np.linspace(100, 200, len(days))}, index=days)
+    flat = pd.DataFrame({"Close": np.full(len(days), 15.0)}, index=days)
+    monkeypatch.setattr(views.data, "load_market",
+                        lambda name: flat if name == "INDIAVIX" else rising)
+    fii = pd.Series([100.0, -50.0, 200.0, 10.0, 40.0, 1.0], index=days[-6:])
+    found = views.check_details(days[-1], fii)
+    assert found["average"].startswith("Nifty 200 vs")
+    assert found["VIX"] == "VIX 15.0 (limit 20)"
+    assert found["global"] == "6 of 6 up in a month"
+    assert found["Foreign"] == "₹+201 cr over 5 days"
+    assert views._detail_for("India VIX below 20", found) == found["VIX"]
 
 
 def test_missing_flow_days_lists_trading_days_the_update_missed():

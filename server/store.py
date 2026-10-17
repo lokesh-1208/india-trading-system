@@ -24,6 +24,7 @@ WATCHED = [
     lambda: config.SHAREHOLDING_FILE,
     lambda: config.PLEDGE_FILE,
     lambda: config.LARGE_DEALS_FILE,
+    lambda: config.FII_DII_FILE,
     lambda: config.PREOPEN_FILE,
 ]
 

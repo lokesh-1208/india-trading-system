@@ -92,5 +92,29 @@ test("market page shows breadth and sector strength", async ({ page }) => {
   await expect(page.getByText("Above their 20-day average")).toBeVisible();
   await expect(page.getByRole("img", { name: /Share of stocks above their averages/ })).toBeVisible();
   const first = fixture("market").sectors[0].industry;
-  await expect(page.getByRole("cell", { name: first, exact: true })).toBeVisible();
+  await expect(page.getByText(first, { exact: true }).first()).toBeVisible();
+});
+
+
+test("market checks show the number behind each check and the date they are for", async ({ page }) => {
+  const market = fixture("market");
+  market.checks_day = "2026-10-16T00:00:00";
+  market.checks[0].detail = "Nifty 23,065 vs 24,310 (-5.1%)";
+  await mockApi(page, { market });
+  await page.goto("/market");
+  await expect(page.getByText("at the Fri, 16 Oct close")).toBeVisible();
+  await expect(page.getByText("Nifty 23,065 vs 24,310 (-5.1%)")).toBeVisible();
+});
+
+test("a buy or sell price takes any paise value, not only steps of 5 paise", async ({ page }) => {
+  const posts = await mockApi(page);
+  await page.goto("/trades");
+  const form = page.getByRole("form", { name: "Record a buy" });
+  await form.getByLabel("Stock").fill("KARURVYSYA");
+  await form.getByLabel("Price (₹)").fill("362.76");
+  await form.getByLabel("Quantity").fill("81");
+  expect(await form.getByLabel("Price (₹)").evaluate((input: HTMLInputElement) => input.validity.valid)).toBe(true);
+  await form.getByRole("button", { name: "Save buy" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved: bought 81 KARURVYSYA");
+  expect(posts[0].body).toMatchObject({ symbol: "KARURVYSYA", price: 362.76, quantity: 81 });
 });

@@ -63,7 +63,7 @@ export type Holding = {
   size_vs_plan?: number | null; peak?: number | null; trail_from?: number | null; trail_active?: boolean;
   last_price: number; "gain_%": number | null; gain_rs: number | null; stop_loss: number;
   trend_line: number | null; bought: string; days_held: number; exit_line: number; exit_pct: number;
-  exit_rs: number; gtt: number; warning?: boolean;
+  exit_rs: number; gtt: number; warning?: boolean; industry?: string;
 };
 export type Today = {
   list_day: string; signal_day: string; week_of: string; headline: string; nothing_to_sell: boolean;
@@ -119,8 +119,9 @@ export type Movers = {
   up: Mover[]; down: Mover[]; rule: { move: number; volume: number };
 };
 export type Market = {
-  level: string; note: string; checks: { name: string; passed: boolean | null }[];
-  markets: { name: string; value: number; change: number }[];
+  level: string; note: string; checks_day?: string;
+  checks: { name: string; passed: boolean | null; detail?: string | null }[];
+  markets: { name: string; value: number; change: number; day?: string }[];
   avoid: { symbol: string; score: number; price: number }[];
   fii_dii: { date: string; FII: number | null; DII: number | null }[];
   breadth: null | {

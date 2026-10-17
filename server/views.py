@@ -11,7 +11,8 @@ import numpy as np
 import pandas as pd
 
 import config
-from trading import (breadth, company, data, flows, holidays, journal, model, movers, news, newsview, picks,
+from trading import (breadth, company, data, flows, holidays, indicators, journal, model, movers, news,
+                     newsview, picks,
                      premarket, today, update)
 
 from server.store import STORE
@@ -165,8 +166,14 @@ def list_summary(status_table, places, market_ok):
         return text + "The market is weak, so nothing is bought today."
     if can_buy == 0:
         return text + "None of them can be bought today."
+    taken = config.MODEL_STYLES[config.MODEL_STYLE]["positions"] - places
     room = f"room for {places} new stock{'s' if places != 1 else ''}"
-    return text + f"{can_buy} can be bought today, with {room}."
+    if places <= 0:
+        return text + f"{can_buy} are in range, but all places are full."
+    if can_buy <= places:
+        return text + f"{can_buy} in range, {room} ({taken} places taken)."
+    return text + (f"{can_buy} in range, {room} ({taken} places taken): the top {places} are "
+                   f"the picks, the other {can_buy - places} are backups.")
 
 
 def today_page(money=None):
@@ -295,6 +302,7 @@ def today_page(money=None):
     weakest = set(today.avoid_list(plan)["symbol"])
     for row in holds:
         row["weakest"] = row["symbol"] in weakest      # among the model's weakest scores
+        row["industry"] = built.industry.get(row["symbol"], "") or "Other"
         # Size against the plan: the model never adds to a holding, so this is information.
         value = row["last_price"] * row["quantity"]
         row["size_vs_plan"] = round(value / per_stock, 2) if per_stock > 0 else None
@@ -503,6 +511,75 @@ def movers_page():
 
 
 # ---------------------------------------------------------------- market ----
+def _last(name, day=None):
+    """(value, date) of a saved market series on or before `day`."""
+    table = data.load_market(name)
+    if table is None or len(table) == 0:
+        return None, None
+    close = table["Close"].dropna()
+    if day is not None:
+        close = close[close.index <= pd.Timestamp(day)]
+    return (float(close.iloc[-1]), close.index[-1]) if len(close) else (None, None)
+
+
+def _month_change(name, day):
+    table = data.load_market(name)
+    if table is None or len(table) == 0:
+        return None
+    close = table["Close"].dropna()
+    close = close[close.index <= pd.Timestamp(day)]
+    month = config.MODEL_MONTH_DAYS
+    if len(close) <= month:
+        return None
+    return float(close.iloc[-1] / close.iloc[-1 - month] - 1)
+
+
+def check_details(day, fii_net=None):
+    """The number behind each market check, as short text, keyed by a word in its name."""
+    details = {}
+    nifty = data.load_market(config.BENCHMARK)
+    if nifty is not None and len(nifty):
+        close = nifty["Close"].dropna()
+        close = close[close.index <= pd.Timestamp(day)]
+        if len(close):
+            last = float(close.iloc[-1])
+            average = close.rolling(config.ROTATION_MARKET_SMA).mean().iloc[-1]
+            trend = indicators.ema(close, config.MARKET_EMA).iloc[-1]
+            if average == average:
+                details["average"] = (f"Nifty {last:,.0f} vs {average:,.0f} "
+                                      f"({(last / average - 1) * 100:+.1f}%)")
+            if trend == trend:
+                details["EMA"] = f"Nifty {last:,.0f} vs {trend:,.0f} ({(last / trend - 1) * 100:+.1f}%)"
+    vix, _ = _last("INDIAVIX", day)
+    if vix is not None:
+        details["VIX"] = f"VIX {vix:.1f} (limit {config.MODEL_VIX_MAX})"
+    from trading.model import GLOBAL_MARKETS
+    moves = [change for change in (_month_change(name, day) for name in GLOBAL_MARKETS)
+             if change is not None]
+    if moves:
+        details["global"] = f"{sum(1 for move in moves if move > 0)} of {len(moves)} up in a month"
+    for key, name, limit in [("Rupee", "USDINR", config.MODEL_RUPEE_FALL_MAX),
+                             ("Crude", "BRENT", config.MODEL_CRUDE_RISE_MAX),
+                             ("Gold", "GOLD", config.MODEL_GOLD_RISE_MAX)]:
+        change = _month_change(name, day)
+        if change is not None:
+            what = "dollar-rupee" if key == "Rupee" else key.lower()
+            details[key] = f"{what} {change * 100:+.1f}% in a month (limit +{limit * 100:.0f}%)"
+    if fii_net is not None and len(fii_net):
+        recent = fii_net.dropna()
+        recent = recent[recent.index <= pd.Timestamp(day)].tail(5)
+        if len(recent):
+            details["Foreign"] = f"₹{recent.sum():+,.0f} cr over {len(recent)} days"
+    return details
+
+
+def _detail_for(name, details):
+    for key, text in details.items():
+        if key in name:
+            return text
+    return None
+
+
 def market_page():
     built = STORE.model()
     plan_checks = built.checks.iloc[-1]
@@ -511,10 +588,12 @@ def market_page():
     # Nifty, India VIX, dollar-rupee and Brent are live in the top bar, so not repeated here.
     for name in ["SP500", "NASDAQ", "FTSE100", "NIKKEI225", "HANGSENG", "SHANGHAI", "GOLD",
                  "SP500_FUTURES"]:
-        value, change = _day_change(data.load_market(name))
+        table = data.load_market(name)
+        value, change = _day_change(table)
         if value is not None:
+            # The close's own date: US markets close after India's evening update.
             markets.append({"name": premarket.OVERNIGHT.get(name, "Nifty 50"),
-                            "value": value, "change": change})
+                            "value": value, "change": change, "day": table.index[-1]})
     flow_table = STORE.flows()
     from trading import flows as flow_module
     net = flow_module.daily_net(flow_table) if len(flow_table) else pd.DataFrame()
@@ -539,9 +618,12 @@ def market_page():
     equity = result["equity"]
     nifty = STORE.nifty()["Close"].reindex(equity.index).ffill()
     step = max(1, len(equity) // 300)
+    checks_day = built.calendar[-1]
+    details = check_details(checks_day, net["FII"] if len(net) else None)
     return clean({
-        "level": level, "note": note,
-        "checks": [{"name": name, "passed": None if pd.isna(passed) else bool(passed)}
+        "level": level, "note": note, "checks_day": checks_day,
+        "checks": [{"name": name, "passed": None if pd.isna(passed) else bool(passed),
+                    "detail": _detail_for(name, details)}
                    for name, passed in plan_checks.items()],
         "markets": markets, "fii_dii": fii, "breadth": width,
         "sectors": records(sectors),

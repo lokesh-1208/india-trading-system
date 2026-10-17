@@ -80,10 +80,54 @@ export default function TradesPage() {
           <span className="note">{totals.tax_estimate ? `tax about ${rupees(totals.tax_estimate)}` : `${totals.closed_count} closed`}</span></div>
       </div>
 
-      {message ? <div className={`notice ${message.tone}`} role="status">{message.text}</div> : null}
+      <section className="panel record" aria-label="Record a trade">
+        <div className="section-head">
+          <h3>Record a trade</h3>
+          <span className="small muted">Enter the exact price Zerodha filled at. Saved in journal/real_trades.csv on this computer only.</span>
+        </div>
+        <form className="record-row" onSubmit={submitBuy} aria-label="Record a buy">
+          <span className="side-tag buy">Buy</span>
+          <label className="grow">Stock
+            <input list="symbols" required value={buy.symbol} placeholder="Symbol"
+              onChange={(event) => setBuy({ ...buy, symbol: event.target.value })} />
+          </label>
+          <datalist id="symbols">{data.symbols.map((symbol) => <option key={symbol} value={symbol} />)}</datalist>
+          <label>Date<input type="date" required value={buy.date} onChange={(event) => setBuy({ ...buy, date: event.target.value })} /></label>
+          <label>Price (₹)<input type="number" step="any" min="0.01" inputMode="decimal" required value={buy.price}
+            onChange={(event) => setBuy({ ...buy, price: event.target.value })} /></label>
+          <label>Quantity<input type="number" step="1" min="1" inputMode="numeric" required value={buy.quantity}
+            onChange={(event) => setBuy({ ...buy, quantity: event.target.value })} /></label>
+          <label className="grow">Note<input value={buy.note} placeholder="optional"
+            onChange={(event) => setBuy({ ...buy, note: event.target.value })} /></label>
+          <button className="primary" type="submit">Save buy</button>
+        </form>
+        {data.open.length === 0 ? (
+          <div className="record-row"><span className="side-tag sell">Sell</span><span className="small muted">Nothing open to sell.</span></div>
+        ) : (
+          <form className="record-row" onSubmit={submitSell} aria-label="Record a sell">
+            <span className="side-tag sell">Sell</span>
+            <label className="grow">Position
+              <select required value={sell.row} onChange={(event) => {
+                const chosen = data.open.find((row) => String(row.row) === event.target.value);
+                const now = chosen ? live?.prices[chosen.symbol]?.price : undefined;
+                setSell({ ...sell, row: event.target.value, price: sell.price || (now ? String(now) : "") });
+              }}>
+                <option value="">Choose…</option>
+                {data.open.map((row) => (
+                  <option key={row.row} value={row.row}>{row.symbol}: {row.quantity} at {price(row.buy_price)} ({day(row.buy_date)})</option>
+                ))}
+              </select>
+            </label>
+            <label>Date<input type="date" required value={sell.date} onChange={(event) => setSell({ ...sell, date: event.target.value })} /></label>
+            <label>Price (₹)<input type="number" step="any" min="0.01" inputMode="decimal" required value={sell.price}
+              onChange={(event) => setSell({ ...sell, price: event.target.value })} /></label>
+            <button className="danger-solid" type="submit">Save sell</button>
+          </form>
+        )}
+        {message ? <div className={`notice ${message.tone}`} role="status">{message.text}</div> : null}
+      </section>
 
-      <div className="row">
-        <div className="main-col">
+      <div className="stack">
           <Panel title="Open positions">
             {data.open.length === 0 ? <Empty>No open positions recorded.</Empty> : (
               <div className="table-wrap">
@@ -134,42 +178,7 @@ export default function TradesPage() {
               </div>
             )}
           </Panel>
-        </div>
-
-        <aside className="side-col">
-          <Panel title="Record a buy">
-            <form className="form" onSubmit={submitBuy} aria-label="Record a buy">
-              <label>Stock
-                <input list="symbols" required value={buy.symbol} onChange={(event) => setBuy({ ...buy, symbol: event.target.value })} />
-              </label>
-              <datalist id="symbols">{data.symbols.map((symbol) => <option key={symbol} value={symbol} />)}</datalist>
-              <label>Date<input type="date" required value={buy.date} onChange={(event) => setBuy({ ...buy, date: event.target.value })} /></label>
-              <label>Price (₹)<input type="number" step="0.05" min="0.05" required value={buy.price} onChange={(event) => setBuy({ ...buy, price: event.target.value })} /></label>
-              <label>Quantity<input type="number" step="1" min="1" required value={buy.quantity} onChange={(event) => setBuy({ ...buy, quantity: event.target.value })} /></label>
-              <label style={{ gridColumn: "1 / -1" }}>Note<input value={buy.note} onChange={(event) => setBuy({ ...buy, note: event.target.value })} /></label>
-              <button className="primary" type="submit">Save buy</button>
-            </form>
-          </Panel>
-          <Panel title="Record a sell">
-            {data.open.length === 0 ? <span className="small muted">Nothing open to sell.</span> : (
-              <form className="form" onSubmit={submitSell} aria-label="Record a sell">
-                <label style={{ gridColumn: "1 / -1" }}>Position
-                  <select required value={sell.row} onChange={(event) => setSell({ ...sell, row: event.target.value })}>
-                    <option value="">Choose…</option>
-                    {data.open.map((row) => (
-                      <option key={row.row} value={row.row}>{row.symbol}: {row.quantity} at {price(row.buy_price)} ({day(row.buy_date)})</option>
-                    ))}
-                  </select>
-                </label>
-                <label>Date<input type="date" required value={sell.date} onChange={(event) => setSell({ ...sell, date: event.target.value })} /></label>
-                <label>Price (₹)<input type="number" step="0.05" min="0.05" required value={sell.price} onChange={(event) => setSell({ ...sell, price: event.target.value })} /></label>
-                <button className="primary" type="submit">Save sell</button>
-              </form>
-            )}
-          </Panel>
-          <p className="small muted">Entered something by mistake? "Delete" removes an open buy; "Undo sell" reopens a sold position. Both ask once more before saving.</p>
-          <p className="small muted">Saved in journal/real_trades.csv on this computer only. Keep your own backup of it.</p>
-        </aside>
+        <p className="small muted">Entered something by mistake? "Delete" removes an open buy; "Undo sell" reopens a sold position. Both ask once more before saving.</p>
       </div>
     </>
   );

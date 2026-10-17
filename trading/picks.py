@@ -8,6 +8,14 @@ record.
 
 A list is named by the day it is for (list_day): the list made from Friday's
 close is Monday's list.
+
+The weekly list has two parts (group): "top", the model's top 10 overall, which
+the tested buying rule picks from; and "sector", the best stocks of each sector
+that the top 10 leaves out, so every sector has up to config.SECTOR_PICKS stocks
+on the list. A sector that already has more in the top 10 keeps them all. The
+sector stocks pass the same checks (above the 20-day EMA, no results due, score
+at least config.SECTOR_MIN_SCORE) and get the same limits and stops, but buying
+them is your own choice: the backtest only tested buying from the top 10.
 """
 
 import pandas as pd
@@ -15,7 +23,8 @@ import pandas as pd
 import config
 from trading import holidays, today
 
-COLUMNS = ["list_day", "signal_day", "rank", "symbol", "score", "close", "weekly"]
+COLUMNS = ["list_day", "signal_day", "rank", "symbol", "score", "close", "weekly", "group",
+           "industry"]
 
 
 def next_trading_day(calendar, position):
@@ -29,28 +38,61 @@ def _week(day):
     return tuple(pd.Timestamp(day).isocalendar()[:2])
 
 
-def daily_list(built, position, count=None):
-    """The top stocks from one close: above their 20-day EMA, no results due soon."""
+def daily_list(built, position, count=None, per_sector=None, top=None):
+    """The top stocks from one close: above their 20-day EMA, no results due soon.
+
+    A weekly list (the one for the first trading day of a week) also gets the best
+    stocks of each sector, up to per_sector (config.SECTOR_PICKS) per sector counting
+    the top ones, as group "sector".
+    top: symbols of a top 10 already saved for this close; the sector part is then
+    made around it (used once, to add the sector part to a list saved before it existed).
+    """
     count = config.DAILY_LIST_SIZE if count is None else count
+    per_sector = config.SECTOR_PICKS if per_sector is None else per_sector
+    industry = getattr(built, "industry", None) or {}
     calendar = built.calendar
     signal_day = calendar[position]
     list_day = next_trading_day(calendar, position)
-    previous = calendar[position]          # the close the list is made from
     ranking = built.score_on(position)
     trend = built.trading["in_trend"].iloc[position]
     due = today.results_soon(built.results, list_day)
-    weekly = _week(list_day) != _week(previous)
-    rows = []
+    weekly = _week(list_day) != _week(signal_day)
+
+    def row_for(rank, symbol, row, group):
+        return {"list_day": list_day.normalize(), "signal_day": signal_day.normalize(),
+                "rank": rank, "symbol": symbol, "score": round(float(row["score"]), 1),
+                "close": round(float(row["close"]), 2), "weekly": weekly, "group": group,
+                "industry": industry.get(symbol, "") or "Other"}
+
+    eligible = []
     for rank, (symbol, row) in enumerate(ranking.iterrows(), start=1):
-        if len(rows) >= count:
-            break
         if bool(row.get("no_new_buy", False)) or symbol in due:
             continue
         if not bool(trend.get(symbol, False)):
             continue
-        rows.append({"list_day": list_day.normalize(), "signal_day": signal_day.normalize(),
-                     "rank": rank, "symbol": symbol, "score": round(float(row["score"]), 1),
-                     "close": round(float(row["close"]), 2), "weekly": weekly})
+        eligible.append((rank, symbol, row))
+        if not weekly and len(eligible) >= count:
+            break
+
+    if top is None:
+        rows = [row_for(rank, symbol, row, "top") for rank, symbol, row in eligible[:count]]
+        taken = {r["symbol"] for r in rows}
+    else:
+        rows, taken = [], set(top)
+    if weekly:
+        in_sector = {}
+        for symbol in taken:
+            sector = industry.get(symbol, "") or "Other"
+            in_sector[sector] = in_sector.get(sector, 0) + 1
+        for rank, symbol, row in eligible:
+            sector = industry.get(symbol, "") or "Other"
+            if symbol in taken or in_sector.get(sector, 0) >= per_sector:
+                continue
+            # Past the top 10: only the best of each sector, and only if the model likes it.
+            if float(row["score"]) < config.SECTOR_MIN_SCORE:
+                break                                 # the ranking is best first
+            in_sector[sector] = in_sector.get(sector, 0) + 1
+            rows.append(row_for(rank, symbol, row, "sector"))
     return pd.DataFrame(rows, columns=COLUMNS)
 
 
@@ -60,12 +102,31 @@ def load_log(path=None):
         return pd.DataFrame(columns=COLUMNS)
     log = pd.read_csv(path, parse_dates=["list_day", "signal_day"])
     log["weekly"] = log["weekly"].astype(str).str.lower().eq("true")
-    return log.reindex(columns=COLUMNS)
+    log = log.reindex(columns=COLUMNS)
+    # Lists saved before the sector part existed are all top-10 lists.
+    log["group"] = log["group"].fillna("top")
+    log["industry"] = log["industry"].fillna("")
+    return log
 
 
-def update_log(built, path=None, weeks=2):
-    """Make and save any missing lists for this week and the week before. Returns the log."""
+def close_is_final(day):
+    """True once NSE's end-of-day file for `day` is saved, so its closes are the real ones.
+
+    16 Oct 2026: Monday's list was saved at 6:42 pm from mid-day prices an earlier
+    update had stored (TECHM 1,725 against a real close of 1,790), four minutes
+    before NSE's file arrived. The clock alone does not say the closes are final.
+    """
+    from trading import gaps
+    return (gaps.BHAVCOPY_DIR / f"{pd.Timestamp(day):%Y-%m-%d}.csv").exists()
+
+
+def update_log(built, path=None, weeks=2, final=None):
+    """Make and save any missing lists for this week and the week before. Returns the log.
+
+    final(day): whether a day's closes are final; the latest day gets a list only then.
+    """
     path = config.PICKS_LOG_FILE if path is None else path
+    final = close_is_final if final is None else final
     log = load_log(path)
     calendar = built.calendar
     latest = len(calendar) - 1
@@ -83,14 +144,30 @@ def update_log(built, path=None, weeks=2):
         # CHENNPETRO on it after their close fell below the trend line).
         if calendar[position].normalize() == unfinished:
             continue
+        if position == latest and not final(calendar[position]):
+            continue
         if calendar[position].normalize() not in done:
             new.append(daily_list(built, position))
+        elif _missing_sector_part(log, calendar[position], calendar, position):
+            # A weekly list saved before the sector part existed: add that part once,
+            # from the same close. Its top 10 is left exactly as saved.
+            saved = log.loc[pd.to_datetime(log["signal_day"]).dt.normalize()
+                            == calendar[position].normalize(), "symbol"]
+            new.append(daily_list(built, position, top=list(saved)))
+    new = [part for part in new if len(part)]
     if new:
         log = pd.concat([log] + new, ignore_index=True) if len(log) else pd.concat(new)
         log = log.sort_values(["list_day", "rank"]).reset_index(drop=True)
         path.parent.mkdir(parents=True, exist_ok=True)
         log.to_csv(path, index=False)
     return log
+
+
+def _missing_sector_part(log, signal_day, calendar, position):
+    if _week(next_trading_day(calendar, position)) == _week(signal_day):
+        return False                                # not a weekly list
+    mine = log[pd.to_datetime(log["signal_day"]).dt.normalize() == signal_day.normalize()]
+    return len(mine) > 0 and not (mine["group"] == "sector").any()
 
 
 def _unfinished_day(now=None):
@@ -111,7 +188,7 @@ def tracker(log, list_day, closes, benchmark=None):
     """
     if len(log) == 0:
         return pd.DataFrame(), []
-    log = log[log["list_day"] <= pd.Timestamp(list_day)].copy()
+    log = top_part(log[log["list_day"] <= pd.Timestamp(list_day)]).copy()
     log["week"] = log["list_day"].map(_week)
     week = _week(list_day)
     previous = _week(pd.Timestamp(list_day) - pd.Timedelta(weeks=1))
@@ -160,6 +237,13 @@ def weekly_list(log, list_day):
     return rows.sort_values("rank").reset_index(drop=True)
 
 
+def top_part(table):
+    """Only the top-10 rows of a list (the part the tested rule buys from)."""
+    if "group" not in table.columns:
+        return table
+    return table[table["group"].fillna("top") == "top"]
+
+
 def weekly_status(weekly, last_close, in_trend, results_due, held, places, max_gap,
                   budget=None):
     """What to do with each stock on the weekly list today.
@@ -169,14 +253,18 @@ def weekly_status(weekly, last_close, in_trend, results_due, held, places, max_g
     (missed, trend broke, results soon, too costly) does not use up a pick: the
     backtest skips such a stock and moves on to the next one on the list.
     Limits stay at the weekly list's close + max_gap all week.
+    Sector rows (group "sector") never take a pick: when buyable their kind is
+    "Sector", a choice left to you.
     status: "Buy" (in range), "Missed" (above the limit), "Trend broke" (closed
     below its 20-day EMA), "Results soon" (results within the block window), "You hold",
     "Too costly" (one share costs more than `budget`, the money per stock).
-    kind: "Pick", "Backup", "Held" or "Skipped".
+    kind: "Pick", "Backup", "Sector", "Held" or "Skipped".
     """
     rows = []
     picks_left = places
     for row in weekly.itertuples():
+        group = getattr(row, "group", "top")
+        group = group if isinstance(group, str) and group else "top"
         limit = row.close * (1 + max_gap)
         last = float(last_close.get(row.symbol, float("nan")))
         if row.symbol in held:
@@ -189,21 +277,25 @@ def weekly_status(weekly, last_close, in_trend, results_due, held, places, max_g
             status, kind = "Trend broke", "Skipped"
         elif last == last and last > limit:
             status, kind = "Missed", "Skipped"
+        elif group == "sector":
+            status, kind = "Buy", "Sector"
         else:
             status = "Buy"
             kind = "Pick" if picks_left > 0 else "Backup"
             picks_left -= 1 if kind == "Pick" else 0
+        industry = getattr(row, "industry", "")
         rows.append({"symbol": row.symbol, "rank": row.rank, "score": row.score,
                      "close": row.close, "limit": round(limit, 2), "last": round(last, 2),
-                     "kind": kind, "status": status})
+                     "kind": kind, "status": status, "group": group,
+                     "industry": industry if isinstance(industry, str) else ""})
     return pd.DataFrame(rows, columns=["symbol", "rank", "score", "close", "limit", "last",
-                                       "kind", "status"])
+                                       "kind", "status", "group", "industry"])
 
 
 def list_scorecard(log, closes, benchmark, top=5):
     """How each weekly list's top picks did from their signal close to the latest close."""
     rows = []
-    weekly = log[log["weekly"]]
+    weekly = top_part(log[log["weekly"]])
     for day, group in weekly.groupby("list_day"):
         best = group.sort_values("rank").head(top)
         moves = [(closes[s].dropna().iloc[-1] / c - 1) * 100

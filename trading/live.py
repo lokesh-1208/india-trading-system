@@ -23,7 +23,7 @@ URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&ra
 INDICES = {"Nifty 50": "^NSEI", "India VIX": "^INDIAVIX", "USD/INR": "INR=X", "Brent": "BZ=F"}
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 CACHE_SECONDS = 30
-MAX_SYMBOLS = 40
+MAX_SYMBOLS = 80     # the weekly list with its sector picks, plus your holdings
 INDIA = timezone(timedelta(hours=5, minutes=30))
 
 _cache = {}                 # symbol -> (fetched at, price row)

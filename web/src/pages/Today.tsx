@@ -2,7 +2,7 @@
 // Context (before the open, news, movers, market health) lives on the Market page.
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { BeforeOpen, Holding, LivePrice, MoneyPlan, Movers, Today, WeekRow, useApi } from "../api";
+import { BeforeOpen, Holding, LivePrice, MoneyPlan, Movers, Sector, Today, WeekRow, useApi } from "../api";
 import { useApp } from "../App";
 import { Empty, Ladder, Loading, Panel, Problem, Section, Tag } from "../components/ui";
 import { clock, LiveNote, useLive } from "../components/live";
@@ -235,6 +235,80 @@ function WeekTable({ rows, days, quote, liveTime }: {
   );
 }
 
+// The weekly list by sector: the top 10 plus the best of every other sector, so money can
+// be spread across sectors. Buying a sector pick is your own choice: the backtest only
+// tested buying from the top 10.
+function SectorTable({ sectors, quote, stopPct, perSector, minScore }: {
+  sectors: Sector[]; quote: (s: string) => LivePrice | undefined; stopPct: number;
+  perSector: number; minScore: number;
+}) {
+  const extra = sectors.reduce((count, sector) => count + sector.stocks.filter((s) => s.group === "sector").length, 0);
+  return (
+    <div className="table-wrap">
+      <p className="small muted" style={{ margin: "0 14px 10px" }}>
+        {sectors.length} sectors · the top 10 plus {extra} sector picks: the best {perSector} of each sector
+        (score {minScore}+, above the 20-day average, no results due). Same limit (+2% over the list close)
+        and stop (−{Math.round(stopPct * 100)}%) as the top 10. Sector picks were not part of the
+        backtest, so how much goes into each is your call.
+      </p>
+      <table className="week-table sector-table">
+        <thead>
+          <tr>
+            <th>Stock</th>
+            <th>Today</th>
+            <th className="right">Stop</th>
+            <th className="right">Limit</th>
+            <th className="right">Live</th>
+            <th className="right">Shares</th>
+          </tr>
+        </thead>
+        {sectors.map((sector) => (
+          <tbody key={sector.industry}>
+            <tr className="sector-head">
+              <td colSpan={6}>
+                <strong>{sector.industry}</strong>{" "}
+                <span className="small muted">· {sector.stocks.length} stock{sector.stocks.length !== 1 ? "s" : ""}
+                  {sector.in_top ? ` · ${sector.in_top} in the top 10` : ""}</span>
+              </td>
+            </tr>
+            {sector.stocks.map((stock) => {
+              const now = quote(stock.symbol);
+              const buyable = stock.status === "Buy" || stock.status === "Monday only";
+              const above = now !== undefined && now.price > stock.ladder.limit;
+              const change = now?.["change_%"];
+              return (
+                <tr key={stock.symbol}>
+                  <td>
+                    <Link to={`/stocks/${stock.symbol}`} style={{ color: "var(--text)", fontWeight: 600 }}>{stock.symbol}</Link>
+                    {" "}<Tag tone={stock.group === "top" ? "blue" : "plain"}>{stock.group === "top" ? "Top 10" : "Sector"}</Tag>
+                    <div className="small muted">Rank {stock.rank} · score {Math.round(stock.score)}</div>
+                  </td>
+                  <td title={stock.why || undefined}>
+                    {buyable && now ? <Tag tone={above ? "warn" : "up"}>{above ? "Above limit now" : "In range now"}</Tag>
+                      : <Tag tone={STATUS_TONE[stock.status] ?? "plain"}>{stock.status === "Buy" ? "In range" : stock.status}</Tag>}
+                    {!buyable && stock.why ? <div className="small muted">{stock.why}</div> : null}
+                  </td>
+                  <td className="right num down">₹{price(stock.ladder.stop)}</td>
+                  <td className="right num">₹{price(stock.ladder.limit)}</td>
+                  <td className="right num">
+                    {now ? <>₹{price(now.price)}{" "}
+                      {change != null ? <span className={change >= 0 ? "up" : "down"}>{pct(change, 1)}</span> : null}</>
+                      : <>₹{price(stock.ladder.last)} <span className="small muted">close</span></>}
+                  </td>
+                  <td className="right num">
+                    {stock.shares > 0 ? <>{stock.shares}<div className="small muted">about {rupees(stock.amount)}</div></>
+                      : <span className="muted">–</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        ))}
+      </table>
+    </div>
+  );
+}
+
 function countBy(rows: WeekRow[]) {
   const counts = new Map<string, number>();
   rows.forEach((row) => counts.set(row.status, (counts.get(row.status) ?? 0) + 1));
@@ -246,7 +320,8 @@ export default function TodayPage() {
   const [money, setMoney] = useState(savedMoney);
   const { data, error, reload } = useApi<Today>(`/api/today?money=${money}`, version);
   const symbols = useMemo(() => data
-    ? Array.from(new Set([...data.week_list.map((row) => row.symbol), ...data.holds.map((row) => row.symbol)])).sort()
+    ? Array.from(new Set([...data.holds.map((row) => row.symbol), ...data.week_list.map((row) => row.symbol),
+      ...(data.sectors ?? []).flatMap((sector) => sector.stocks.map((stock) => stock.symbol))]))
     : [], [data]);
   const { live, failed: liveFailed } = useLive(symbols);
   const quote = (symbol: string) => live?.prices[symbol];
@@ -360,6 +435,17 @@ export default function TodayPage() {
                 {data.results_due.map((item) => `${item.symbol} (${day(item.date)})`).join(", ")}.</p>
             ) : null}
           </Section>
+
+          {data.sectors?.length ? (
+            <details className="panel tight week" id="sectors" open>
+              <summary>
+                <strong>Best by sector</strong>{" "}
+                <span className="small muted">· this week's list grouped by sector · {data.sectors.length} sectors</span>
+              </summary>
+              <SectorTable sectors={data.sectors} quote={quote} stopPct={market.stop_loss}
+                perSector={data.sector_rules?.per_sector ?? 3} minScore={data.sector_rules?.min_score ?? 50} />
+            </details>
+          ) : null}
 
           <Section title="Your stocks" id="mine"
             aside={data.holds.length ? `Stop-loss ${Math.round(market.stop_loss * 100)}% under your buy price` : undefined}>

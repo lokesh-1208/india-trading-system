@@ -3,12 +3,19 @@
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from trading import picks
 
 # Fri 9 Oct, Mon 12, Tue 13 Oct 2026
 CALENDAR = pd.DatetimeIndex(["2026-10-08", "2026-10-09", "2026-10-12", "2026-10-13"])
 SYMBOLS = ["AAA", "BBB", "CCC", "DOWN", "LATE"]
+
+
+@pytest.fixture(autouse=True)
+def _closes_are_final(monkeypatch):
+    """These tests are about the lists, not about NSE's day file being saved."""
+    monkeypatch.setattr(picks, "close_is_final", lambda day: True)
 
 
 def _built(results=None, closes=None):
@@ -129,3 +136,75 @@ def test_list_scorecard_compares_the_weekly_picks_with_nifty(tmp_path):
     card = picks.list_scorecard(log, close_table, nifty, top=2)
     monday = card.set_index("list_day").loc[pd.Timestamp("2026-10-12")]
     assert monday["average_%"] == 10.5 and monday["nifty_%"] == 10.0 and monday["vs_nifty"] == 0.5
+
+
+# ---- the sector part of the weekly list ----
+
+SECTOR_SYMBOLS = ["F1", "F2", "F3", "F4", "I1", "I2", "I3", "I4", "P1", "P2", "WEAK"]
+SECTOR_OF = {"F1": "Financial Services", "F2": "Financial Services", "F3": "Financial Services",
+             "F4": "Financial Services", "I1": "Information Technology",
+             "I2": "Information Technology", "I3": "Information Technology",
+             "I4": "Information Technology", "P1": "Healthcare", "P2": "Healthcare",
+             "WEAK": "Realty"}
+
+
+def _sector_built():
+    scores = [95.0, 94.0, 93.0, 92.0, 80.0, 70.0, 65.0, 60.0, 55.0, 52.0, 30.0]
+    close_table = pd.DataFrame({s: [100.0] * 4 for s in SECTOR_SYMBOLS}, index=CALENDAR)
+
+    def score_on(position):
+        return pd.DataFrame({"score": scores, "close": close_table.iloc[position].to_numpy(),
+                             "no_new_buy": [False] * len(scores)}, index=SECTOR_SYMBOLS)
+    trend = pd.DataFrame({s: [True] * 4 for s in SECTOR_SYMBOLS}, index=CALENDAR)
+    return SimpleNamespace(calendar=CALENDAR, score_on=score_on, results=None,
+                           trading={"in_trend": trend}, industry=SECTOR_OF)
+
+
+def test_weekly_list_adds_the_best_of_each_sector_after_the_top():
+    listed = picks.daily_list(_sector_built(), 1, count=4, per_sector=3)
+    top = listed[listed["group"] == "top"]
+    sector = listed[listed["group"] == "sector"]
+    # A sector with four in the top keeps all four.
+    assert list(top["symbol"]) == ["F1", "F2", "F3", "F4"]
+    # Other sectors get their best, up to 3 each; a score under the minimum is left out.
+    assert list(sector["symbol"]) == ["I1", "I2", "I3", "P1", "P2"]
+    assert dict(zip(listed["symbol"], listed["industry"]))["P1"] == "Healthcare"
+
+
+def test_daily_lists_that_are_not_weekly_have_no_sector_part():
+    listed = picks.daily_list(_sector_built(), 2, count=4, per_sector=3)
+    assert set(listed["group"]) == {"top"} and len(listed) == 4
+
+
+def test_sector_stocks_never_take_a_pick():
+    weekly = pd.DataFrame({"symbol": ["AAA", "SEC"], "rank": [1, 30], "score": [90.0, 60.0],
+                           "close": [100.0, 100.0], "group": ["top", "sector"],
+                           "industry": ["X", "Y"]})
+    table = picks.weekly_status(weekly, {"AAA": 110.0, "SEC": 100.0}, {}, set(), set(),
+                                2, 0.02).set_index("symbol")
+    assert table.loc["AAA", "status"] == "Missed"
+    assert (table.loc["SEC", "status"], table.loc["SEC", "kind"]) == ("Buy", "Sector")
+
+
+def test_no_list_is_saved_from_a_day_whose_final_closes_are_not_in(tmp_path):
+    built, _ = _built()
+    log = picks.update_log(built, tmp_path / "log.csv", final=lambda day: False)
+    assert pd.Timestamp("2026-10-13") not in set(log["signal_day"])
+    log = picks.update_log(built, tmp_path / "log.csv", final=lambda day: True)
+    assert pd.Timestamp("2026-10-13") in set(log["signal_day"])
+
+
+def test_an_old_weekly_list_gets_its_sector_part_once_and_keeps_its_top(tmp_path):
+    path = tmp_path / "log.csv"
+    built = _sector_built()
+    old = picks.daily_list(built, 1, count=4)
+    old = old[old["group"] == "top"][["list_day", "signal_day", "rank", "symbol", "score",
+                                      "close", "weekly"]]
+    old.to_csv(path, index=False)                   # saved before the sector part existed
+    log = picks.update_log(built, path)
+    monday = log[log["list_day"] == pd.Timestamp("2026-10-12")]
+    assert list(monday.loc[monday["group"] == "top", "symbol"]) == ["F1", "F2", "F3", "F4"]
+    assert (monday["group"] == "sector").sum() > 0
+    saved = path.read_text()
+    picks.update_log(built, path)
+    assert path.read_text() == saved

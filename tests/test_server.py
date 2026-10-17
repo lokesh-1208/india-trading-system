@@ -110,6 +110,14 @@ def test_missing_flow_days_lists_trading_days_the_update_missed():
     assert views.missing_flow_days([], days) == []
 
 
+def test_a_missed_flow_day_is_warned_about_only_while_it_is_recent():
+    days = pd.to_datetime(["2026-10-09", "2026-10-12", "2026-10-13", "2026-10-14",
+                           "2026-10-15", "2026-10-16", "2026-10-19"])
+    saved = ["2026-10-09", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-19"]
+    assert views.missing_flow_days(saved, days[:6], recent=5) == [pd.Timestamp("2026-10-12")]
+    assert views.missing_flow_days(saved, days, recent=5) == []     # 12 Oct is 6 days back
+
+
 def test_next_list_is_the_coming_monday():
     assert views.next_list_day("2026-10-12") == pd.Timestamp("2026-10-19")
     assert views.next_list_day("2026-10-16") == pd.Timestamp("2026-10-19")

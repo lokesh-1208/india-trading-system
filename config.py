@@ -22,6 +22,12 @@ JOURNAL_FILE = ROOT / "journal" / "trades.csv"
 REAL_TRADES_FILE = ROOT / "journal" / "real_trades.csv"   # your real-money trades
 PICKS_LOG_FILE = ROOT / "journal" / "picks_log.csv"    # every day's top-10 list, kept as made
 DAILY_LIST_SIZE = 10
+# The weekly list also carries the best stocks of each sector (NSE's industry label),
+# so the money can be spread across sectors by your own choice. Up to this many per
+# sector, counting the top 10; a sector with more in the top 10 keeps them all.
+SECTOR_PICKS = 3
+# A sector stock must score at least this (the model calls 60+ strong, 40 or less weak).
+SECTOR_MIN_SCORE = 50
 SHORT_TERM_TAX = 0.20     # tax on gains from shares held under a year (rule in force in 2026;
                           # check with your CA). Losses in the same year reduce taxable gains.
 
@@ -263,6 +269,9 @@ INTRADAY_STOP_ATR = 1.5        # intraday stop: this many ATRs above the sell pr
 ANNOUNCEMENTS_FILE = DATA_DIR / "news" / "announcements.csv"   # company announcements to NSE
 FII_DII_FILE = DATA_DIR / "flows" / "fii_dii.csv"              # daily buying and selling
 LARGE_DEALS_FILE = DATA_DIR / "flows" / "large_deals.csv"      # bulk and block deals
+# A missed FII/DII day is warned about for this many trading days, then dropped: the
+# figures can never be fetched later (NSE keeps only the latest day).
+FLOW_MISS_WARN_DAYS = 5
 ANNOUNCEMENT_DAYS_FIRST_RUN = 10     # how far back the first download goes
 ANNOUNCEMENT_DAYS_KEPT = 400         # older announcements are dropped from the file
 

@@ -81,17 +81,19 @@ def warm_up():
             pass                       # the page shows its own error when opened
 
 
-def missing_flow_days(flow_days, trading_days):
-    """Trading days since the first saved FII/DII day that have no figures.
+def missing_flow_days(flow_days, trading_days, recent=None):
+    """Recent trading days (the last `recent`) since the first saved FII/DII day with no figures.
 
-    NSE only gives the latest day, so a day the update did not run is lost.
+    NSE only gives the latest day, so a day the update did not run is lost for good.
+    Older misses are dropped from the warning: nothing can be done about them.
     """
+    recent = config.FLOW_MISS_WARN_DAYS if recent is None else recent
     flow_days = set(pd.to_datetime(list(flow_days)).normalize())
     if not flow_days:
         return []
     first = min(flow_days)
-    return [day for day in pd.to_datetime(list(trading_days)).normalize()
-            if day >= first and day not in flow_days]
+    days = list(pd.to_datetime(list(trading_days)).normalize())[-recent:]
+    return [day for day in days if day >= first and day not in flow_days]
 
 
 def status():
@@ -199,10 +201,12 @@ def today_page(money=None):
     window_open = first_day is not None and today.buy_day(now).normalize() == first_day
     if not window_open:
         status_table.loc[status_table["status"] == "Buy", "status"] = "Monday only"
-    buy_now = status_table[status_table["status"] == "Buy"].head(places)
+    top_status = status_table[status_table["group"] == "top"]
+    buy_now = top_status[top_status["status"] == "Buy"].head(places)
     buy_symbols = set(buy_now["symbol"])
     ranking = plan["today"]
-    buyable = status_table[status_table["status"] == "Buy"]
+    # The money plan follows the tested rule, so it fills places from the top 10 only.
+    buyable = top_status[top_status["status"] == "Buy"]
     # Risk sizing: a jumpy stock gets less than a full place (config "risk_per_trade").
     scales = built.amount_scales(list(status_table["symbol"]))
     money_plan = today.money_plan(
@@ -239,7 +243,7 @@ def today_page(money=None):
                 "Trend broke": f"closed below its {config.EMA_FAST}-day average",
                 "Results soon": "results due within 5 days"}.get(row.status, "")
 
-    buys, skips = [], []
+    buys, skips, by_sector = [], [], {}
     for row in status_table.itertuples():
         stop = row.close * (1 - rules["stop_loss"])
         item = {"symbol": row.symbol, "rank": row.rank, "score": row.score,
@@ -250,6 +254,13 @@ def today_page(money=None):
                 "size_share": round(scales.get(row.symbol, 1.0), 2),
                 "kind": row.kind, "status": row.status}
         item["amount"] = item["shares"] * row.limit
+        # Every stock of the weekly list, by sector: the top 10 ones and the sector picks.
+        sector = row.industry or built.industry.get(row.symbol, "") or "Other"
+        by_sector.setdefault(sector, []).append({
+            **item, "group": row.group, "why": why(row),
+            "status": row.status if plan["market_ok"] or row.status != "Buy" else "Market weak"})
+        if row.group != "top":
+            continue
         if row.symbol in buy_symbols:
             item["tag"] = "Buy" if row.kind == "Pick" else "Backup"
             buys.append(item)
@@ -260,7 +271,15 @@ def today_page(money=None):
             item["why"] = why(row)
             skips.append(item)
 
-    explain = list_summary(status_table, places, bool(plan["market_ok"]))
+    explain = list_summary(top_status, places, bool(plan["market_ok"]))
+    sectors = sorted(({"industry": name, "stocks": stocks,
+                       "in_top": sum(1 for stock in stocks if stock["group"] == "top")}
+                      for name, stocks in by_sector.items()),
+                     key=lambda sector: min(stock["rank"] for stock in sector["stocks"]))
+    extra = int((status_table["group"] == "sector").sum())
+    if extra:
+        explain += (f" Best by sector adds {extra} more stocks across {len(sectors)} sectors: "
+                    "buying those is your choice (they were not part of the backtest).")
 
     # ---- your stocks ----
     trend = STORE.trend_line()
@@ -300,6 +319,7 @@ def today_page(money=None):
     # ---- watch: today's list but not this week's ----
     todays = log[log["list_day"] == list_day]
     watch = todays[~todays["symbol"].isin(set(weekly["symbol"]) | set(held))]
+    watch = picks.top_part(watch)
     weekly_day = len(weekly) and weekly["list_day"].iloc[0] == list_day
 
     known = plan["checks"].dropna()
@@ -309,7 +329,7 @@ def today_page(money=None):
     tags = {item["symbol"]: item["tag"] for item in buys}
     tracked = {row["symbol"]: row for row in week_rows.to_dict("records")} if len(week_rows) else {}
     week_list = []
-    for row in status_table.itertuples():
+    for row in top_status.itertuples():
         seen = tracked.get(row.symbol, {})
         week_list.append({
             "symbol": row.symbol, "rank": row.rank, "score": row.score,
@@ -322,6 +342,9 @@ def today_page(money=None):
 
     return clean({
         "week_list": week_list,
+        # The weekly list by sector: the top 10 plus up to SECTOR_PICKS best per sector.
+        "sectors": sectors,
+        "sector_rules": {"per_sector": config.SECTOR_PICKS, "min_score": config.SECTOR_MIN_SCORE},
         "week_days": [str(pd.Timestamp(day).date()) for day in week_days],
         "list_day": list_day, "signal_day": last_day, "week_of": weekly["list_day"].iloc[0]
         if len(weekly) else list_day,
@@ -598,7 +621,9 @@ def stock_page(symbol):
     if symbol in set(weekly["symbol"]):
         on = weekly.set_index("symbol").loc[symbol]
         limit = float(on["close"]) * (1 + (rules.get("max_gap") or 0))
-        stands.append({"kind": "weekly", "text": f"On this week's list · buy below ₹{limit:,.2f}"})
+        part = " (sector pick)" if str(on.get("group", "top")) == "sector" else ""
+        stands.append({"kind": "weekly",
+                       "text": f"On this week's list{part} · buy below ₹{limit:,.2f}"})
         levels.update(limit=limit)
         levels.setdefault("stop", float(on["close"]) * (1 - rules["stop_loss"]))
     elif list_day is not None and symbol in set(log.loc[log["list_day"] == list_day, "symbol"]):

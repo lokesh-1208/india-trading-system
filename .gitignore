@@ -221,12 +221,12 @@ __marimo__/
 data/
 reports/
 journal/
-# The web app: its libraries are installed by npm; the built page (web/dist) IS kept,
+# The web app: its libraries are installed by npm; the built page (frontend/dist) IS kept,
 # so the app runs on a computer without Node.js.
-web/node_modules/
-web/test-results/
-web/playwright-report/
-web/*.tsbuildinfo
-!web/dist/
+frontend/node_modules/
+frontend/test-results/
+frontend/playwright-report/
+frontend/*.tsbuildinfo
+!frontend/dist/
 # Windows shortcuts point to a path on one computer
 *.lnk

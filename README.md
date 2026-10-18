@@ -17,8 +17,8 @@ behaved in the past and does not promise future results.
 ```
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
-python update_data.py
+pip install -r backend\requirements.txt
+python backend\update_data.py
 ```
 
 The first download takes a few minutes.
@@ -44,13 +44,14 @@ The first download takes a few minutes.
 | Stocks | One stock: candlestick chart (TradingView lightweight-charts) with the 20-day average, buy limit and stop-loss; the model's view; ROCE, cash flow, scorecard, owners, news, reports. |
 | Trades | Record buys and sells; profit after charges. |
 
-How it is built: `server/` is a small FastAPI server that answers the page's questions
-from the existing `trading/` code; `web/` is the page, written in React and TypeScript.
-The built page (`web/dist`) is kept in the repository, so Node.js is only needed to change
-the page (`cd web`, `npm install`, `npm run build`; `npm run dev` for live editing with
-the server running). Tests: `python -m pytest` for the server and model, and
-`npx playwright test` in `web/` for the page (it uses saved example answers, so it needs
-no data).
+How it is built: the **backend** (`backend/`) is Python. `backend/server/` is a small
+FastAPI server that answers the page's questions using the model and data code in
+`backend/trading/`. The **frontend** (`frontend/`) is the page, written in React and
+TypeScript. The built page (`frontend/dist`) is kept in the repository, so Node.js is only
+needed to change the page (`cd frontend`, `npm install`, `npm run build`; `npm run dev` for
+live editing with the server running). Tests: `python -m pytest` from the project folder
+for the backend (`tests/backend/`), and `npx playwright test` in `frontend/` for the page
+(`frontend/tests/`; it uses saved example answers, so it needs no data).
 
 ## The Today page
 
@@ -108,19 +109,19 @@ Every setting is in `config.py` (`MODEL_STYLES` and `MODEL_WEIGHTS`).
 Not proven for real money. The history is under five years and most company data only
 covers the last few years. Results are sensitive to the settings (for example the exit-line
 length), so treat the figures as a rough guide. Every test, including the ones that failed, is recorded in the project's
-backtest log; the scripts are in `research/`.
+backtest log. The one-off test scripts were removed from the code on 18 Oct 2026 and stay in
+the Git history; `research/` keeps the two that are still run.
 
 What was tested and kept:
 
 - **Smaller amounts in a caution market (75%).** Worst fall from -20.7% to -18.1%, smaller in
-  both halves of the history, for about 1 point less growth a year (`research/strength.py`).
-
+  both halves of the history, for about 1 point less growth a year (strength test).
 - **The 2% buy range.** Buying after the stock had already risen more than 2% from the
   signal close lost money. Buying below the signal close did well (`research/entry_gap.py`).
 - **No buying just before results.** Slightly better growth and a smaller worst fall in
   every setting tested.
 
-What was tested and rejected (13 Oct 2026, `research/strength.py`, each mixed between the
+What was tested and rejected (13 Oct 2026, strength test, each mixed between the
 two halves of the history): selling before results, 4 / 6 / 8 stocks, a 6-12% stop or none,
 buying from the top 5 / 15 / 20, exit lines from 10 to 75 days, smaller amounts for
 high-swing stocks. Score groups: business, valuation and price each help; ownership helped in
@@ -129,7 +130,7 @@ From every start date since 2022 the model beat Nifty by 10-25 points a year.
 
 
 - A lower limit on the buy range, limit orders at the signal close, skipping stocks close
-  to their trend line or after a spike (`research/entry_quality.py`).
+  to their trend line or after a spike (entry quality test).
 - Six other rule sets: a chart breakout, monthly momentum, pullback buying, new-high
   breakouts, an ownership-only rotation and short selling the weakest scores.
 
@@ -138,50 +139,55 @@ From every start date since 2022 the model beat Nifty by 10-25 points a year.
 | Command | What it does |
 |---|---|
 | `start_kasauti.bat` | Opens the app. Its **Update data** button does the same job as `update_data.py`. |
-| `python update_data.py` | Downloads prices for about 800 stocks, index membership history, Nifty, India VIX, global markets, the rupee, crude, gold, company announcements, FII/DII figures, bulk and block deals, results of companies that just reported, and (weekly) shareholding into `data/`. Daily prices come from NSE's day file; the full Yahoo history is downloaded once a week. |
+| `python backend/update_data.py` | Downloads prices for about 800 stocks, index membership history, Nifty, India VIX, global markets, the rupee, crude, gold, company announcements, FII/DII figures, bulk and block deals, results of companies that just reported, and (weekly) shareholding into `data/`. Daily prices come from NSE's day file; the full Yahoo history is downloaded once a week. |
 | `python research/full_model.py` | Runs the model through the past and prints its results and today's scores. |
 | `python research/entry_gap.py` | The buy-range test. |
-| `python stock_card.py TCS` | Everything known about one company: price range, valuation, growth, profitability, debt, dividend, shareholding and a ten-point scorecard. |
-| `python -m pytest` | Runs the automated checks. GitHub runs them on every pull request. |
-| `python run_backtest.py`, `python daily_report.py` | The first rule set (chart breakout), kept for reference only. It lost money in its test. |
+| `python backend/stock_card.py TCS` | Everything known about one company: price range, valuation, growth, profitability, debt, dividend, shareholding and a ten-point scorecard. |
+| `python -m pytest` | Runs the backend's automated checks. GitHub runs them on every pull request. |
 
 ## Project layout
 
 ```
-config.py                all settings: model weights, trading rules, risk limits, charges
-server/                  the app's local web server (FastAPI): what each page shows
-web/                     the app's page (React, TypeScript); web/dist is the built page
-trading/model.py         the model: every factor in one score per stock, market checks
-trading/rotation.py      the day-by-day simulation used to test the model
-trading/today.py         the Today page's lists: buy range, hold or sell, avoid, events
-trading/picks.py         each day's top-10 list, saved; the weekly list, tracker and track record
-trading/breadth.py       market breadth and sector strength (not shown in the app yet)
-trading/journal.py       your real trades (journal/real_trades.csv, not on GitHub)
-trading/update.py        refreshes all data; shared by update_data.py and the app
-trading/data.py          downloads and loads prices and index membership
-trading/indicators.py    EMA, RSI, ATR
-trading/fundamentals.py  company results, ratios, results dates, which companies are due
-trading/gaps.py          daily prices from NSE's day file (bhavcopy); fills days Yahoo misses
-trading/movers.py        market movers on the Today page: heavy buying/selling and why (info only)
-trading/premarket.py     before the open: global moves, overnight news, NSE pre-open prices (info only)
-trading/newsview.py      reads announcements as good or bad; news ideas; what usually happened after news
-trading/filings.py       company results from NSE's own filings (XBRL): 2018 on, cash flow, ROCE, filing times
-trading/pledge.py        % of promoter shares pledged (NSE)
-trading/shareholding.py  who owns each company: promoters, FII, DII, mutual funds, public
-trading/news.py          company announcements to NSE, sorted into plain categories
-trading/flows.py         daily FII/DII buying and selling, bulk and block deals
-trading/nse.py           opens a session with the NSE website
-trading/company.py       the company card
-trading/charges.py       Zerodha delivery charges
-trading/shorts.py        the short-selling test (failed; kept for reference)
-trading/backtest.py, strategy.py, screens.py, report.py   the first rule set (reference only)
-research/                scripts behind every test in the backtest log
-tests/                   automated checks
+backend/                 the Python side: the model, the data and the app's server
+  config.py              all settings: model weights, trading rules, risk limits, charges
+  update_data.py         the evening data update (also run by update_daily.bat)
+  premarket_update.py    the before-the-open refresh (also run by update_morning.bat)
+  stock_card.py          the company card in the terminal
+  requirements.txt       the Python libraries
+  server/                the app's local web server (FastAPI): what each page shows
+  trading/model.py       the model: every factor in one score per stock, market checks
+  trading/rotation.py    the day-by-day simulation used to test the model
+  trading/today.py       the Today page's lists: hold or sell, avoid, money plan, news
+  trading/picks.py       each day's top-10 list, saved; the weekly list, tracker and track record
+  trading/breadth.py     market breadth and sector strength (Market page)
+  trading/journal.py     your real trades (journal/real_trades.csv, not on GitHub)
+  trading/update.py      refreshes all data; shared by update_data.py and the app
+  trading/data.py        downloads and loads prices and index membership
+  trading/indicators.py  EMA, RSI, ATR
+  trading/fundamentals.py  company results, results dates, which companies are due
+  trading/gaps.py        daily prices from NSE's day file (bhavcopy); fills days Yahoo misses
+  trading/movers.py      market movers: heavy buying/selling and why (info only)
+  trading/premarket.py   before the open: global moves, overnight news, NSE pre-open prices
+  trading/newsview.py    reads announcements as good or bad; news ideas and their past reactions
+  trading/filings.py     company results from NSE's own filings (XBRL): cash flow, ROCE, filing times
+  trading/pledge.py      % of promoter shares pledged (NSE)
+  trading/shareholding.py  who owns each company: promoters, FII, DII, mutual funds, public
+  trading/news.py        company announcements to NSE, sorted into plain categories
+  trading/flows.py       daily FII/DII buying and selling, bulk and block deals
+  trading/nse.py         opens a session with the NSE website
+  trading/company.py     the company card
+  trading/charges.py     Zerodha delivery charges
+  trading/screens.py     company data for the stock page and stock_card.py
+frontend/                the page (React, TypeScript): src/ is the code, dist/ the built page,
+                         tests/ the browser tests (kept here, next to the libraries they use)
+tests/backend/           the backend's automated checks
+research/                full_model.py (the model through the past) and entry_gap.py (buy range)
 universe/                fallback stock list, used only if the membership download fails
+*.bat                    double-click files: open the app, updates, shortcut, schedule
 ```
 
-`data/`, `reports/` and `journal/` are created when you run the scripts and are not
-committed to Git. Keep your own backup of `journal/real_trades.csv`.
+`data/`, `reports/` and `journal/` (in the project folder) are created when you run the
+scripts and are not committed to Git. Keep your own backup of `journal/real_trades.csv`.
 
 ## Stock universe
 

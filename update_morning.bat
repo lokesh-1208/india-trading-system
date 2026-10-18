@@ -6,4 +6,4 @@ cd /d "%~dp0"
 if not exist reports mkdir reports
 call .venv\Scripts\activate.bat
 echo ==== %date% %time% (before the open) ==== >> reports\update_log.txt
-python premarket_update.py >> reports\update_log.txt 2>&1
+python backend\premarket_update.py >> reports\update_log.txt 2>&1

@@ -476,7 +476,6 @@ def news_page():
         if len(table):
             table["what"] = [today.short_news(text, 180) for text in table["what"]]
     return clean({"buys": records(buys), "exits": records(exits),
-                  "reactions": records(reactions), "days": config.NEWS_REACTION_DAYS,
                   "note": newsview.IDEA_TEST_NOTE})
 
 

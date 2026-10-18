@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Idea, Mover, Movers, NewsIdeas, useApi } from "../api";
 import { useApp } from "../App";
-import { Empty, Loading, Panel, Problem, Tag } from "../components/ui";
+import { Empty, Loading, Problem, Tag } from "../components/ui";
 import { dateTime, day, pct } from "../format";
 
 function IdeaTable({ rows }: { rows: Idea[] }) {
@@ -117,25 +117,6 @@ export default function NewsPage() {
         )}
       </section>
 
-      {ideas.data?.reactions.length ? (
-        <Panel title="What usually happens after news" aside={`a year of NSE filings · ${ideas.data.days} trading days, against Nifty`}>
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>Kind of news</th><th className="right">Past cases</th><th className="right">Average move</th><th className="right">Beat Nifty</th></tr></thead>
-              <tbody>
-                {ideas.data.reactions.map((row) => (
-                  <tr key={row.group}>
-                    <td>{row.group}</td>
-                    <td className="right num">{row.cases}</td>
-                    <td className={`right num ${row["average_%"] >= 0 ? "up" : "down"}`}>{pct(row["average_%"])}</td>
-                    <td className="right num muted">{Math.round(row["beat_nifty_%"])}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Panel>
-      ) : null}
     </>
   );
 }

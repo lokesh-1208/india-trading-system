@@ -29,11 +29,11 @@ test("before the open lists likely movers on both sides", async ({ page }) => {
   if (data.down.length) await expect(page.getByRole("table")).toContainText(data.down[0].symbol);
 });
 
-test("news ideas show the test result and what usually happens after news", async ({ page }) => {
+test("news ideas show the test result, without the past-reactions table", async ({ page }) => {
   await mockApi(page);
   await page.goto("/news");
   await expect(page.getByText(/Tested on one year/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "What usually happens after news" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What usually happens after news" })).toHaveCount(0);
 });
 
 test("mood and movers show both sides", async ({ page }) => {

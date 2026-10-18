@@ -107,8 +107,7 @@ export type Idea = {
   history: string; idea: string; agree: string;
 };
 export type NewsIdeas = {
-  buys: Idea[]; exits: Idea[]; days: number; note: string;
-  reactions: { group: string; lean: number; cases: number; "average_%": number; "beat_nifty_%": number }[];
+  buys: Idea[]; exits: Idea[]; note: string;
 };
 export type Mover = {
   symbol: string; day: string; close: number; "change_%": number; "gap_%": number; volume_x: number;

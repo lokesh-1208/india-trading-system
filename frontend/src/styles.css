@@ -415,3 +415,16 @@ details.week[open] > summary::before { content: "▾"; }
   .hold-row .h-who { grid-column: 1 / -1; }
   .hold-row .h-now { align-items: flex-start; text-align: left; }
 }
+
+/* Your stocks: every holding in two short lines, all figures kept */
+.mine-summary { margin: -4px 0 0; color: var(--muted); }
+.mine-list { display: flex; flex-direction: column; gap: 8px; }
+.mine-list.is-long { max-height: 600px; overflow-y: auto; padding-right: 4px; }
+.hold-row.dense { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 10px 12px; }
+.hold-row.dense .d-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.hold-row.dense .d-who { display: flex; flex: 1 1 auto; justify-content: flex-start; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+.hold-row.dense .d-now { display: flex; flex-direction: column; align-items: flex-end; text-align: right; white-space: nowrap; }
+.hold-row.dense .d-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+.hold-row.dense .d-facts .gap-chip { margin-left: 6px; }
+.hold-row.dense .h-note { padding-top: 4px; }
+.size-chip { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--down-bg); color: var(--down); white-space: nowrap; }

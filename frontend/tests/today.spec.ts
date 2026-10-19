@@ -150,3 +150,30 @@ test("your stocks show how far each one is above its exit line", async ({ page }
   await expect(row).toContainText("Exit line");
   await expect(row).toContainText(/% (above|below)/);
 });
+
+test("every holding shows all its figures in a short card; sells come first; a long list scrolls in its box", async ({ page }) => {
+  const today = fixture("today");
+  const base = today.holds[0];
+  today.holds = [
+    ...["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"].map((symbol) => ({ ...base, symbol })),
+    { ...base, symbol: "BIGONE", size_vs_plan: 2.18 },
+    { ...base, symbol: "SELLME", action: "SELL", reason: "2 closes below the 20-day line" },
+  ];
+  await mockApi(page, { today });
+  await page.goto("/");
+  await expect(page.getByTestId("mine-summary")).toContainText("8 stocks · 1 to sell · 1 bigger than the plan");
+  // Nothing is folded away: every card has its exit line and GTT stop
+  const cards = page.locator("#mine .hold-row");
+  await expect(cards).toHaveCount(8);
+  for (const symbol of ["AAA", "FFF", "BIGONE"]) {
+    const card = page.getByRole("link", { name: `${symbol}: Hold` });
+    await expect(card).toContainText("Exit line");
+    await expect(card).toContainText("GTT stop");
+  }
+  await expect(cards.first()).toHaveAttribute("aria-label", "SELLME: Sell");
+  await expect(page.getByRole("link", { name: "BIGONE: Hold" }).getByTestId("oversized")).toContainText("2.2× today's place size");
+  // Each card stays short (two lines), and a long list scrolls inside its box
+  const box = await page.getByRole("link", { name: "AAA: Hold" }).boundingBox();
+  expect(box!.height).toBeLessThan(110);
+  await expect(page.locator(".mine-list")).toHaveClass(/is-long/);
+});

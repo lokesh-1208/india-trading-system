@@ -34,7 +34,9 @@ function holdingDay(bought: string, today = new Date()) {
   return Math.max(count, 1);
 }
 
-// One holding on one line: where it is now, and how far it is from its exit.
+// One holding as a dense card: all of its figures, in two short lines.
+// Line 1: name, status, live price and gain. Line 2: what you hold, the exit line and the GTT stop.
+// A third line appears only when there is something to act on (sell, a close below the line).
 function HoldRow({ row, quote }: { row: Holding; quote?: LivePrice }) {
   const now = quote?.price ?? row.last_price;
   const gainPct = quote ? (quote.price / row.buy_price - 1) * 100 : row["gain_%"];
@@ -44,48 +46,75 @@ function HoldRow({ row, quote }: { row: Holding; quote?: LivePrice }) {
   const room = row.exit_line ? (now / row.exit_line - 1) * 100 : null;
   const belowLine = room !== null && room < 0;
   const roomTone = room === null ? "" : room < 0 ? "down" : room < 2 ? "warn" : "up";
+  const oversized = row.size_vs_plan != null && row.size_vs_plan > 1.5;
+  const liveBelow = belowLine && row.action === "HOLD" && !!quote;
   return (
-    <Link to={`/stocks/${row.symbol}`} className={`hold-row ${row.action === "SELL" ? "is-sell" : ""}`}
+    <Link to={`/stocks/${row.symbol}`} className={`hold-row dense ${row.action === "SELL" ? "is-sell" : ""}`}
       aria-label={`${row.symbol}: ${label}`}>
-      <div className="h-who">
-        <div className="line1">
+      <div className="d-top">
+        <span className="d-who">
           <span className="symbol">{row.symbol}</span><Tag tone={tone}>{label}</Tag>
           {row.warning ? <Tag tone="warn">1 close below the line</Tag> : null}
           {row.weakest ? <Tag tone="down">Weakest scores</Tag> : null}
-        </div>
-        <span className="small muted">{row.quantity} @ ₹{price(row.buy_price)} · day {holdingDay(row.bought)}
-          {row.industry ? ` · ${row.industry}` : ""}</span>
-      </div>
-      <div className="h-now">
-        <span className="num strong">{quote ? <span className="small muted live-word">live </span> : null}₹{price(now)}</span>
-        {row.action === "WAIT" && !quote ? <span className="small muted">checked after the close</span> : (
-          <span className={`num small ${(gainPct ?? 0) >= 0 ? "up" : "down"}`}>{pct(gainPct)} · {signedRupees(gainRs)}</span>
-        )}
-      </div>
-      <div className="h-exit">
-        <span className="small muted" title="Sell after two closes in a row below this line">Exit line</span>
-        <span className="num">₹{price(row.exit_line)}
-          {room !== null ? <span className={`gap-chip ${roomTone}`}>{room >= 0 ? `${room.toFixed(1)}% above` : `${Math.abs(room).toFixed(1)}% below`}</span> : null}
+          {oversized ? <span className="size-chip" data-testid="oversized"
+            title="Bigger than today's place size: a loss here costs more than the plan allows">
+            {row.size_vs_plan!.toFixed(1)}× today's place size</span> : null}
+        </span>
+        <span className="d-now">
+          <span className="num strong">{quote ? <span className="small muted live-word">live </span> : null}₹{price(now)}</span>
+          {row.action === "WAIT" && !quote ? <span className="small muted">checked after the close</span> : (
+            <span className={`num small ${(gainPct ?? 0) >= 0 ? "up" : "down"}`}>{pct(gainPct)} · {signedRupees(gainRs)}</span>
+          )}
         </span>
       </div>
-      <div className="h-stop">
-        <span className="small muted">GTT stop</span>
-        <span className="num">₹{price(row.gtt)}</span>
-        <span className={`small num ${row.exit_pct > 0 ? "up" : "down"}`}>{row.exit_pct > 0 ? "locks " : "risk "}{pct(row.exit_pct)}</span>
+      <div className="d-facts small">
+        <span className="muted">{row.quantity} @ ₹{price(row.buy_price)} · day {holdingDay(row.bought)}{row.industry ? ` · ${row.industry}` : ""}</span>
+        <span title="Sell after two closes in a row below this line">
+          <span className="muted">Exit line </span><span className="num">₹{price(row.exit_line)}</span>
+          {room !== null ? <span className={`gap-chip ${roomTone}`}>{room >= 0 ? `${room.toFixed(1)}% above` : `${Math.abs(room).toFixed(1)}% below`}</span> : null}
+        </span>
+        <span>
+          <span className="muted">GTT stop </span><span className="num">₹{price(row.gtt)}</span>{" "}
+          <span className={`num ${row.exit_pct > 0 ? "up" : "down"}`}>{row.exit_pct > 0 ? "locks " : "risk "}{pct(row.exit_pct)}</span>
+        </span>
       </div>
-      {row.action === "SELL" || row.warning || (belowLine && row.action === "HOLD") || (row.size_vs_plan != null && row.size_vs_plan > 1.5) ? (
+      {row.action === "SELL" || row.warning || liveBelow ? (
         <div className="h-note">
           {row.action === "SELL" ? <span className="small down">{row.reason}: sell at tomorrow's open.</span> : null}
           {row.warning ? <span className="small warn-text">{row.reason}. If the next close is below ₹{price(row.exit_line)} too, it is a sell.</span> : null}
-          {belowLine && row.action === "HOLD" && quote ? <span className="small down">{row.warning
+          {liveBelow ? <span className="small down">{row.warning
             ? `Live price is below the sell line again. If today's close is below ₹${price(row.exit_line)}, sell at tomorrow's open.`
             : `Live price is below the sell line. The rule decides at the close: it sells only after two closes in a row below ₹${price(row.exit_line)}.`}</span> : null}
-          {row.size_vs_plan != null && row.size_vs_plan > 1.5 ? (
-            <span className="small down strong" data-testid="oversized">{row.size_vs_plan.toFixed(1)}× today's place size: bigger than the plan</span>
-          ) : null}
         </div>
       ) : null}
     </Link>
+  );
+}
+
+// Your stocks: a one-line summary, then every holding with all its figures (sells first).
+function YourStocks({ holds, quote }: { holds: Holding[]; quote: (symbol: string) => LivePrice | undefined }) {
+  const order = (row: Holding) => (row.action === "SELL" ? 0 : row.warning ? 1 : 2);
+  const sorted = [...holds].sort((a, b) => order(a) - order(b));
+  const sells = holds.filter((row) => row.action === "SELL").length;
+  const warnings = holds.filter((row) => row.action !== "SELL" && row.warning).length;
+  const oversized = holds.filter((row) => row.size_vs_plan != null && row.size_vs_plan > 1.5).length;
+  const gain = holds.reduce((sum, row) => {
+    const live = quote(row.symbol);
+    return sum + (live ? (live.price - row.buy_price) * row.quantity : row.gain_rs ?? 0);
+  }, 0);
+  const parts = [`${holds.length} ${holds.length === 1 ? "stock" : "stocks"}`];
+  if (sells) parts.push(`${sells} to sell`);
+  if (warnings) parts.push(`${warnings} with a warning`);
+  if (oversized) parts.push(`${oversized} bigger than the plan`);
+  return (
+    <>
+      <p className="small mine-summary" data-testid="mine-summary">
+        {parts.join(" · ")} · <span className={gain >= 0 ? "up" : "down"}>{signedRupees(gain)}</span> open
+      </p>
+      <div className={`mine-list${holds.length > 6 ? " is-long" : ""}`}>
+        {sorted.map((row) => <HoldRow key={row.symbol} row={row} quote={quote(row.symbol)} />)}
+      </div>
+    </>
   );
 }
 
@@ -525,7 +554,7 @@ export default function TodayPage() {
               </div>
               {data.holds.length === 0 ? (
                 <Empty>After you buy, record it under <Link to="/trades">Stocks &amp; trades</Link> and it shows here, marked Hold or Sell each day.</Empty>
-              ) : data.holds.map((row) => <HoldRow key={row.symbol} row={row} quote={quote(row.symbol)} />)}
+              ) : <YourStocks holds={data.holds} quote={quote} />}
             </section>
           </div>
 

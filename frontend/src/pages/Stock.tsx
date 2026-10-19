@@ -1,13 +1,52 @@
 // One stock: price chart, where it stands for you, the model's view and the business numbers.
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Bars as BarsData, StockPage, useApi } from "../api";
+import { Bars as BarsData, LivePrice, StockPage, useApi } from "../api";
 import { useApp } from "../App";
+import { clock, useLive } from "../components/live";
 import PriceChart from "../components/PriceChart";
 import { Bars, Check, Empty, Loading, Panel, Problem, Tag } from "../components/ui";
 import { crore, dateTime, day, num, pct, price, share } from "../format";
 
 const PERIODS: [string, number | null][] = [["1M", 22], ["6M", 126], ["1Y", 252], ["3Y", 756], ["All", null]];
+
+// Today's live price, shown only when it is newer than the last saved close.
+// Display only: the score, checks, levels and chart all stay on the saved close.
+function LiveHeader({ quote, marketOpen, lastClose, asOf }:
+  { quote: LivePrice; marketOpen: boolean; lastClose: number; asOf: string }) {
+  const change = quote["change_%"];
+  const move = quote.previous_close !== null ? quote.price - quote.previous_close : null;
+  return (
+    <div data-testid="stock-live" style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+      <span className="num" style={{ fontSize: 30, fontWeight: 600 }}>₹{price(quote.price)}</span>
+      <span className={`num ${(change ?? 0) >= 0 ? "up" : "down"}`}>
+        {move !== null ? `${move >= 0 ? "+" : "−"}${price(Math.abs(move))} ` : ""}
+        {change !== null ? `(${pct(change, 2)}) ` : ""}
+        <span className="muted">· {marketOpen ? `live ${clock(quote.time)}` : `${day(quote.time)} close, not saved yet`}</span>
+      </span>
+      <span className="small muted">Last saved close ₹{price(lastClose)} · {day(asOf)}</span>
+    </div>
+  );
+}
+
+// Where the live price stands against the 20-day line and your levels.
+function LiveLevels({ now, trend, levels }:
+  { now: number; trend: number | null; levels: { bought?: number; stop?: number; limit?: number } }) {
+  const gap = (level: number) => (now / level - 1) * 100;
+  const parts: string[] = [];
+  if (trend) parts.push(`${pct(Math.abs(gap(trend)), 1, false)} ${now >= trend ? "above" : "below"} the 20-day line (₹${price(trend)})`);
+  if (levels.bought) parts.push(`${pct(gap(levels.bought), 1)} from your buy price`);
+  if (levels.limit) parts.push(now <= levels.limit ? `inside the buy limit (₹${price(levels.limit)})`
+    : `above the buy limit (₹${price(levels.limit)}): do not chase`);
+  if (levels.stop) parts.push(now > levels.stop ? `${pct(gap(levels.stop), 1, false)} above the stop-loss (₹${price(levels.stop)})`
+    : `at or below the stop-loss (₹${price(levels.stop)})`);
+  if (!parts.length) return null;
+  return (
+    <div className="notice" data-testid="live-levels" style={{ border: "1px solid var(--line)" }}>
+      <strong>Now:</strong> {parts.join(" · ")}. Buy, hold and sell decisions use the close, not this price.
+    </div>
+  );
+}
 
 function Tile({ name, value, note, tone }: { name: string; value: string; note?: string; tone?: string }) {
   return (
@@ -27,6 +66,8 @@ export default function StockPageView() {
   const page = useApi<StockPage>(`/api/stocks/${symbol}`, version);
   const bars = useApi<BarsData>(`/api/stocks/${symbol}/prices${days ? `?days=${days}` : ""}`, version);
   const reports = useApi<{ year: string; link: string; size: string }[]>(`/api/stocks/${symbol}/reports`);
+  // Live price for display only; asked again every minute while the page is open.
+  const { live } = useLive([symbol.toUpperCase()]);
 
   const levels = useMemo(() => {
     const found = page.data?.levels ?? {};
@@ -43,6 +84,9 @@ export default function StockPageView() {
   const card = data.card as Record<string, number | null>;
   const fin = data.financial;
   const red = data.pledged_pct !== null && data.pledged_pct >= data.pledge_red_flag;
+  const quote = live?.prices[data.symbol];
+  // Newer than the saved close: a trading day the daily update has not saved yet (today, usually).
+  const isNewer = !!quote?.time && quote.time.slice(0, 10) > data.as_of.slice(0, 10);
 
   return (
     <>
@@ -60,13 +104,19 @@ export default function StockPageView() {
             {data.model ? <Tag>Rank {data.model.rank} of {data.model.of} · score {Math.round(data.model.score)}</Tag> : <Tag>Not scored by the model</Tag>}
           </div>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-          <span className="num" style={{ fontSize: 30, fontWeight: 600 }}>₹{price(data.price)}</span>
-          <span className={`num ${data.change >= 0 ? "up" : "down"}`}>
-            {data.change >= 0 ? "+" : "−"}{price(Math.abs(data.change))} ({pct(data.change_pct, 2)}) · {day(data.as_of)}
-          </span>
-        </div>
+        {isNewer && quote ? (
+          <LiveHeader quote={quote} marketOpen={!!live?.market_open} lastClose={data.price} asOf={data.as_of} />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+            <span className="num" style={{ fontSize: 30, fontWeight: 600 }}>₹{price(data.price)}</span>
+            <span className={`num ${data.change >= 0 ? "up" : "down"}`}>
+              {data.change >= 0 ? "+" : "−"}{price(Math.abs(data.change))} ({pct(data.change_pct, 2)}) · {day(data.as_of)}
+            </span>
+          </div>
+        )}
       </section>
+
+      {isNewer && quote ? <LiveLevels now={quote.price} trend={data.trend_line} levels={data.levels} /> : null}
 
       {red ? (
         <div className="notice warn" role="alert">
@@ -149,6 +199,7 @@ export default function StockPageView() {
                   {data.model.checks.map((check) => <Check key={check.name} passed={check.passed}>{check.name}</Check>)}
                 </div>
                 <span className="small muted">The model buys only when all three are true and the market allows buying.</span>
+                <span className="small muted" data-testid="model-as-of">Score and checks from the {day(data.as_of)} close.</span>
               </>
             ) : <Empty>Not a current Nifty 500 member, or it trades too little.</Empty>}
           </Panel>

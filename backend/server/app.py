@@ -193,4 +193,6 @@ def page(path: str):
     index = PAGE / "index.html"
     if not index.exists():
         raise HTTPException(404, "The page is not built yet (frontend/dist is missing).")
-    return FileResponse(index)
+    # The browser must ask for index.html every time, so a new build shows at once.
+    # (The files in /assets have new names on each build, so they can be kept.)
+    return FileResponse(index, headers={"Cache-Control": "no-cache"})

@@ -416,26 +416,15 @@ details.week[open] > summary::before { content: "▾"; }
   .hold-row .h-now { align-items: flex-start; text-align: left; }
 }
 
-/* Your stocks: quiet holdings fold to one line */
+/* Your stocks: every holding in two short lines, all figures kept */
 .mine-summary { margin: -4px 0 0; color: var(--muted); }
 .mine-list { display: flex; flex-direction: column; gap: 8px; }
-.mine-list.is-long { max-height: 560px; overflow-y: auto; padding-right: 4px; }
-.hold-fold { display: flex; flex-direction: column; gap: 6px; }
-.hold-line {
-  display: grid; grid-template-columns: minmax(0, 1.4fr) auto auto auto 16px; align-items: center; gap: 14px;
-  width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px;
-  background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer;
-}
-.hold-line:hover { border-color: var(--blue); }
-.hold-line[aria-expanded="true"] { border-color: var(--blue); }
-.hold-line .hl-who { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.hold-line .symbol { font-weight: 700; font-size: 14.5px; }
-.hold-line .hl-now, .hold-line .hl-gain { white-space: nowrap; text-align: right; }
-.hold-line .hl-room .gap-chip { margin-left: 0; white-space: nowrap; }
-.hold-line .hl-chevron { color: var(--muted); font-size: 12px; text-align: right; }
-@container (max-width: 520px) {
-  .hold-line { grid-template-columns: minmax(0, 1fr) auto 16px; row-gap: 4px; }
-  .hold-line .hl-gain { grid-column: 1; text-align: left; }
-  .hold-line .hl-room { grid-column: 2; }
-}
-.hold-row.is-bare { margin-top: -4px; padding-top: 10px; border-style: dashed; }
+.mine-list.is-long { max-height: 600px; overflow-y: auto; padding-right: 4px; }
+.hold-row.dense { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 10px 12px; }
+.hold-row.dense .d-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.hold-row.dense .d-who { display: flex; flex: 1 1 auto; justify-content: flex-start; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+.hold-row.dense .d-now { display: flex; flex-direction: column; align-items: flex-end; text-align: right; white-space: nowrap; }
+.hold-row.dense .d-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+.hold-row.dense .d-facts .gap-chip { margin-left: 6px; }
+.hold-row.dense .h-note { padding-top: 4px; }
+.size-chip { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--down-bg); color: var(--down); white-space: nowrap; }

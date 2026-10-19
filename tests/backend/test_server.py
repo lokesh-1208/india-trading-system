@@ -85,6 +85,12 @@ def test_the_page_is_served_for_any_other_address(client, tmp_path, monkeypatch)
     assert "Kasauti" in client.get("/stocks/TCS").text
 
 
+def test_the_page_is_never_kept_by_the_browser_so_a_new_build_shows_at_once(client, tmp_path, monkeypatch):
+    (tmp_path / "index.html").write_text("<html>Kasauti</html>")
+    monkeypatch.setattr(server_app, "PAGE", tmp_path)
+    assert client.get("/stocks/TCS").headers["cache-control"] == "no-cache"
+
+
 def test_clean_turns_numpy_and_missing_values_into_json():
     import numpy as np
     cleaned = views.clean({"a": np.float64(1.5), "b": float("nan"), "c": pd.Timestamp("2026-10-13"),

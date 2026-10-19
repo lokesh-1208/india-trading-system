@@ -12,6 +12,32 @@ test("stock page shows the chart, the business numbers and the scorecard", async
   await expect(page.getByRole("button", { name: "1Y" })).toHaveAttribute("aria-pressed", "true");
 });
 
+test("stock page shows today's live price beside the last saved close", async ({ page }) => {
+  // Sample data: saved close 1,459.90 on 13 Oct, live 1,533.30 on 14 Oct (+5.03%)
+  await mockApi(page);
+  await page.goto("/stocks/CHENNPETRO");
+  const header = page.getByTestId("stock-live");
+  await expect(header).toContainText("₹1,533.30");
+  await expect(header).toContainText("+5.03%");
+  await expect(header).toContainText("live 10:59");
+  await expect(header).toContainText("Last saved close ₹1,459.90");
+  const levels = page.getByTestId("live-levels");
+  await expect(levels).toContainText("above the 20-day line");
+  await expect(levels).toContainText("above the buy limit");
+  await expect(levels).toContainText("decisions use the close");
+  await expect(page.getByTestId("model-as-of")).toContainText("close");
+});
+
+test("stock page shows only the saved close when the live price is not newer", async ({ page }) => {
+  const live = fixture("live");
+  live.prices.CHENNPETRO.time = "2026-10-13T15:30:00+05:30";
+  await mockApi(page, { live });
+  await page.goto("/stocks/CHENNPETRO");
+  await expect(page.getByRole("img", { name: /CHENNPETRO price chart/ })).toBeVisible();
+  await expect(page.getByTestId("stock-live")).toHaveCount(0);
+  await expect(page.getByTestId("live-levels")).toHaveCount(0);
+});
+
 test("stock search finds a stock by symbol", async ({ page }) => {
   await mockApi(page);
   await page.goto("/");

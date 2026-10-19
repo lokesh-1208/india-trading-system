@@ -35,7 +35,7 @@ function holdingDay(bought: string, today = new Date()) {
 }
 
 // One holding on one line: where it is now, and how far it is from its exit.
-function HoldRow({ row, quote }: { row: Holding; quote?: LivePrice }) {
+function HoldRow({ row, quote, bare = false }: { row: Holding; quote?: LivePrice; bare?: boolean }) {
   const now = quote?.price ?? row.last_price;
   const gainPct = quote ? (quote.price / row.buy_price - 1) * 100 : row["gain_%"];
   const gainRs = quote ? (quote.price - row.buy_price) * row.quantity : row.gain_rs;
@@ -45,23 +45,23 @@ function HoldRow({ row, quote }: { row: Holding; quote?: LivePrice }) {
   const belowLine = room !== null && room < 0;
   const roomTone = room === null ? "" : room < 0 ? "down" : room < 2 ? "warn" : "up";
   return (
-    <Link to={`/stocks/${row.symbol}`} className={`hold-row ${row.action === "SELL" ? "is-sell" : ""}`}
+    <Link to={`/stocks/${row.symbol}`} className={`hold-row ${row.action === "SELL" ? "is-sell" : ""}${bare ? " is-bare" : ""}`}
       aria-label={`${row.symbol}: ${label}`}>
       <div className="h-who">
-        <div className="line1">
+        {bare ? null : <div className="line1">
           <span className="symbol">{row.symbol}</span><Tag tone={tone}>{label}</Tag>
           {row.warning ? <Tag tone="warn">1 close below the line</Tag> : null}
           {row.weakest ? <Tag tone="down">Weakest scores</Tag> : null}
-        </div>
+        </div>}
         <span className="small muted">{row.quantity} @ ₹{price(row.buy_price)} · day {holdingDay(row.bought)}
           {row.industry ? ` · ${row.industry}` : ""}</span>
       </div>
-      <div className="h-now">
+      {bare ? <div className="h-now"><span className="small">Open stock page →</span></div> : <div className="h-now">
         <span className="num strong">{quote ? <span className="small muted live-word">live </span> : null}₹{price(now)}</span>
         {row.action === "WAIT" && !quote ? <span className="small muted">checked after the close</span> : (
           <span className={`num small ${(gainPct ?? 0) >= 0 ? "up" : "down"}`}>{pct(gainPct)} · {signedRupees(gainRs)}</span>
         )}
-      </div>
+      </div>}
       <div className="h-exit">
         <span className="small muted" title="Sell after two closes in a row below this line">Exit line</span>
         <span className="num">₹{price(row.exit_line)}
@@ -86,6 +86,68 @@ function HoldRow({ row, quote }: { row: Holding; quote?: LivePrice }) {
         </div>
       ) : null}
     </Link>
+  );
+}
+
+// Does this holding need a look today? Those stay open as full cards; the rest fold to one line.
+function needsLook(row: Holding, quote?: LivePrice) {
+  const now = quote?.price ?? row.last_price;
+  const belowLine = !!row.exit_line && now < row.exit_line;
+  const oversized = row.size_vs_plan != null && row.size_vs_plan > 1.5;
+  return row.action === "SELL" || !!row.warning || !!row.weakest || belowLine || oversized;
+}
+
+// A quiet holding on one line; click it to open the full card.
+function HoldLine({ row, quote, open, onToggle }:
+  { row: Holding; quote?: LivePrice; open: boolean; onToggle: () => void }) {
+  const now = quote?.price ?? row.last_price;
+  const gainPct = quote ? (quote.price / row.buy_price - 1) * 100 : row["gain_%"];
+  const gainRs = quote ? (quote.price - row.buy_price) * row.quantity : row.gain_rs;
+  const label = row.action === "WAIT" ? "Bought today" : "Hold";
+  const room = row.exit_line ? (now / row.exit_line - 1) * 100 : null;
+  const roomTone = room === null ? "" : room < 0 ? "down" : room < 2 ? "warn" : "up";
+  return (
+    <div className="hold-fold">
+      <button type="button" className="hold-line" aria-expanded={open} onClick={onToggle}
+        aria-label={`${row.symbol}: ${label}, ${open ? "hide" : "show"} details`}>
+        <span className="hl-who"><span className="symbol">{row.symbol}</span><Tag tone={row.action === "WAIT" ? "plain" : "up"}>{label}</Tag></span>
+        <span className="hl-now num">{quote ? <span className="small muted live-word">live </span> : null}₹{price(now)}</span>
+        <span className={`hl-gain num small ${(gainPct ?? 0) >= 0 ? "up" : "down"}`}>{pct(gainPct)} · {signedRupees(gainRs)}</span>
+        <span className="hl-room">{room !== null ? <span className={`gap-chip ${roomTone}`}>{room >= 0 ? `${room.toFixed(1)}% above exit` : `${Math.abs(room).toFixed(1)}% below exit`}</span> : null}</span>
+        <span className="hl-chevron" aria-hidden="true">{open ? "▴" : "▾"}</span>
+      </button>
+      {open ? <HoldRow row={row} quote={quote} bare /> : null}
+    </div>
+  );
+}
+
+// Your stocks: a one-line summary, the ones that need a look as full cards first, the rest folded.
+function YourStocks({ holds, quote }: { holds: Holding[]; quote: (symbol: string) => LivePrice | undefined }) {
+  const [opened, setOpened] = useState<string | null>(null);
+  const look = holds.filter((row) => needsLook(row, quote(row.symbol)));
+  const quiet = holds.filter((row) => !needsLook(row, quote(row.symbol)));
+  const sells = holds.filter((row) => row.action === "SELL").length;
+  const gain = holds.reduce((sum, row) => {
+    const live = quote(row.symbol);
+    return sum + (live ? (live.price - row.buy_price) * row.quantity : row.gain_rs ?? 0);
+  }, 0);
+  const parts = [`${holds.length} ${holds.length === 1 ? "stock" : "stocks"}`];
+  if (sells) parts.push(`${sells} to sell`);
+  if (look.length - sells > 0) parts.push(`${look.length - sells} to look at`);
+  if (quiet.length) parts.push(`${quiet.length} quiet`);
+  return (
+    <>
+      <p className="small mine-summary" data-testid="mine-summary">
+        {parts.join(" · ")} · <span className={gain >= 0 ? "up" : "down"}>{signedRupees(gain)}</span> open
+      </p>
+      <div className={`mine-list${holds.length > 8 ? " is-long" : ""}`}>
+        {look.map((row) => <HoldRow key={row.symbol} row={row} quote={quote(row.symbol)} />)}
+        {quiet.map((row) => (
+          <HoldLine key={row.symbol} row={row} quote={quote(row.symbol)} open={opened === row.symbol}
+            onToggle={() => setOpened(opened === row.symbol ? null : row.symbol)} />
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -525,7 +587,7 @@ export default function TodayPage() {
               </div>
               {data.holds.length === 0 ? (
                 <Empty>After you buy, record it under <Link to="/trades">Stocks &amp; trades</Link> and it shows here, marked Hold or Sell each day.</Empty>
-              ) : data.holds.map((row) => <HoldRow key={row.symbol} row={row} quote={quote(row.symbol)} />)}
+              ) : <YourStocks holds={data.holds} quote={quote} />}
             </section>
           </div>
 

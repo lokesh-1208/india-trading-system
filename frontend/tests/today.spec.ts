@@ -12,7 +12,7 @@ test.describe("Today page", () => {
     for (const item of today.buys) {
       await expect(page.getByRole("link", { name: `${item.symbol}: ${item.tag}` })).toBeVisible();
     }
-    await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^TESTCO: Hold/ })).toBeVisible();
     await page.getByRole("tab", { name: /Week tracker/ }).click();
     await expect(page.locator("#week table")).toContainText("Missed");
     await expect(page.getByTestId("next-list")).toContainText("Fri, 9 Oct");
@@ -28,7 +28,7 @@ test.describe("Today page", () => {
     await expect(chennpetro).toContainText("Above limit now");
     await expect(chennpetro).toContainText("do not chase");
     await expect(page.getByRole("link", { name: "KOTAKBANK: Buy" })).toContainText("In range now");
-    await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toContainText("live ₹106.00");
+    await expect(page.getByRole("button", { name: /^TESTCO: Hold/ })).toContainText("live ₹106.00");
     await page.getByRole("tab", { name: /Week tracker/ }).click();
     await expect(page.locator("#week table")).toContainText("back in range");
   });
@@ -146,7 +146,36 @@ test("best by sector is a grid of sector cards; a card opens the full list in a 
 test("your stocks show how far each one is above its exit line", async ({ page }) => {
   await mockApi(page);
   await page.goto("/");
+  const line = page.getByRole("button", { name: /^TESTCO: Hold/ });
+  await expect(line).toContainText(/% (above|below) exit/);
+  await line.click();
   const row = page.getByRole("link", { name: "TESTCO: Hold" });
   await expect(row).toContainText("Exit line");
   await expect(row).toContainText(/% (above|below)/);
+});
+
+test("quiet holdings fold to one line; ones that need a look stay open as cards", async ({ page }) => {
+  const today = fixture("today");
+  const base = today.holds[0];
+  today.holds = [
+    { ...base, symbol: "SELLME", action: "SELL", reason: "2 closes below the 20-day line" },
+    { ...base, symbol: "WARNME", warning: true, reason: "1 close below the line" },
+    ...["AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG", "HHH"].map((symbol) => ({ ...base, symbol })),
+  ];
+  await mockApi(page, { today });
+  await page.goto("/");
+  await expect(page.getByTestId("mine-summary")).toContainText("10 stocks · 1 to sell · 1 to look at · 8 quiet");
+  await expect(page.getByRole("link", { name: "SELLME: Sell" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "WARNME: Hold" })).toBeVisible();
+  // Quiet ones are one line each and closed
+  await expect(page.locator(".hold-line")).toHaveCount(8);
+  await expect(page.getByRole("link", { name: "AAA: Hold" })).toHaveCount(0);
+  // One opens at a time
+  await page.getByRole("button", { name: /^AAA: Hold/ }).click();
+  await expect(page.getByRole("link", { name: "AAA: Hold" })).toBeVisible();
+  await page.getByRole("button", { name: /^BBB: Hold/ }).click();
+  await expect(page.getByRole("link", { name: "BBB: Hold" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "AAA: Hold" })).toHaveCount(0);
+  // A long list scrolls inside its box instead of stretching the page
+  await expect(page.locator(".mine-list")).toHaveClass(/is-long/);
 });

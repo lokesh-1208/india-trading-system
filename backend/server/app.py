@@ -113,6 +113,7 @@ class Buy(BaseModel):
     price: float
     quantity: int
     note: str = ""
+    source: str = ""        # "tested", "watchlist" or "own"; empty: worked out from the list
 
 
 class Sell(BaseModel):
@@ -125,7 +126,7 @@ class Sell(BaseModel):
 def buy(order: Buy):
     try:
         return views.record_buy(order.symbol.upper(), order.date, order.price, order.quantity,
-                                order.note)
+                                order.note, order.source)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 

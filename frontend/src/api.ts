@@ -45,6 +45,11 @@ export type Ladder = { stop: number; signal: number; limit: number; last: number
 export type BuyItem = {
   symbol: string; rank: number; score: number; about: string; ladder: Ladder; shares: number;
   amount: number; kind: string; status: string; tag?: string; why?: string; size_share?: number;
+} & ListFacts;
+/** Watchlist facts shown with each stock (5 Nov 2026): where it came from and why it ranks. */
+export type ListFacts = {
+  tested?: boolean; weeks_on?: number | null; carried?: boolean; added?: string | null;
+  split?: Record<string, number> | null; "lead_%"?: number | null;
 };
 export type MoneyPlan = {
   capital: number; account: number; cash: number; invested: number; holdings_value: number;
@@ -57,7 +62,8 @@ export type Sector = { industry: string; in_top: number; stocks: SectorStock[] }
 export type WeekRow = {
   symbol: string; rank: number; score: number; status: string; why: string; close: number; limit: number;
   last: number; ranks: Record<string, number>; "since_first_%": number | null; "nifty_%": number | null;
-};
+  first_day?: string | null;
+} & ListFacts;
 export type Holding = {
   symbol: string; action: "HOLD" | "SELL" | "WAIT"; reason: string; quantity: number; buy_price: number; weakest?: boolean;
   size_vs_plan?: number | null; peak?: number | null; trail_from?: number | null; trail_active?: boolean;
@@ -67,7 +73,7 @@ export type Holding = {
 };
 export type Today = {
   list_day: string; signal_day: string; headline: string; nothing_to_sell: boolean;
-  explain: string; money_plan: MoneyPlan; buy_window?: { open: boolean; day: string | null; next: string }; list_from: string | null; next_list: string; week_list: WeekRow[]; week_days: string[];
+  explain: string; money_plan: MoneyPlan; buy_window?: { open: boolean; day: string | null; next: string; any_day?: boolean }; lead_days?: number; list_from: string | null; next_list: string; week_list: WeekRow[]; week_days: string[];
   sectors?: Sector[]; sector_rules?: { per_sector: number; min_score: number };
   market: {
     level: string; note: string; ok: boolean; share: number; per_stock: number; money: number;
@@ -164,11 +170,14 @@ export type Trades = {
   };
   open: {
     row: number; symbol: string; buy_date: string; buy_price: number; quantity: number; cost: number;
-    last_price: number; value: number; gain: number; "gain_%": number; note: string;
+    last_price: number; value: number; gain: number; "gain_%": number; note: string; source?: string;
   }[];
   closed: {
     row: number; symbol: string; buy_date: string; buy_price: number; quantity: number; sell_date: string;
     sell_price: number; profit: number; "profit_%": number; charges: number; net_profit: number;
+    source?: string;
   }[];
   symbols: string[];
+  by_source?: { source: string; label: string; trades: number; won: number; net_profit: number }[];
+  sources?: Record<string, string>;
 };

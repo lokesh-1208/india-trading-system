@@ -2,7 +2,7 @@
 // Context (before the open, news, movers, market health) lives on the Market page.
 import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { BeforeOpen, Holding, LivePrice, MoneyPlan, Movers, Sector, SectorStock, Today, WeekRow, useApi } from "../api";
+import { BeforeOpen, Holding, LivePrice, MoneyPlan, Movers, Sector, SectorStock, Today, WeekRow, useApi, ListFacts } from "../api";
 import { useApp } from "../App";
 import { Drawer, Empty, Ladder, Loading, Panel, Problem, Stat, Tabs, Tag } from "../components/ui";
 import { clock, LiveNote, useLive } from "../components/live";
@@ -225,10 +225,76 @@ function shortWhy(row: WeekRow) {
   }
 }
 
-function WeekTable({ rows, days, quote, liveTime }: {
-  rows: WeekRow[]; days: string[]; quote: (s: string) => LivePrice | undefined; liveTime?: string;
+const GROUP_LABEL: Record<string, string> = {
+  price: "Price", ownership: "Owners", business: "Business", valuation: "Value", news: "News", flows: "Deals",
+};
+
+// What each score measures, for the legend and the hover text. Each is 0-100 against the
+// day's scored stocks: 50 is average, 75 means better than about 75% of them.
+const GROUP_HELP: Record<string, string> = {
+  price: "Chart strength: 6-month rise, above its 20- and 50-day averages, RSI, rising volume, near its 52-week high, calm daily swings.",
+  ownership: "Who is buying: last quarter's change in foreign (FII), mutual fund, promoter, insurer and Indian institution holdings; promoter pledge counts against it.",
+  business: "How the company is doing: sales and profit growth (1 and 3 years, latest quarter), margins, return on equity and capital, debt, cash from operations.",
+  valuation: "How cheap it is: PE against its industry, price to book, earnings yield, dividend yield. High means cheap.",
+  news: "Company filings to NSE in the last 30 days: orders and contracts, dividends and upgrades count for it; legal trouble, downgrades and director exits against.",
+  flows: "Bulk and block deals in the last 30 days: big buyers minus big sellers. 50 means no deals.",
+};
+
+function ScoreLegend({ leadDays }: { leadDays?: number }) {
+  const months = leadDays ? Math.round(leadDays / 21) : 3;
+  return (
+    <details className="score-legend small muted" data-testid="score-legend">
+      <summary>What the scores mean</summary>
+      <p>Each score is out of 100 and compares the stock with all the stocks Kasauti scores that day:
+        50 is average, 75 means better than about 75% of them. The total score weighs them
+        Price 25%, Owners 25%, Business 20%, Value 15%, News 7.5%, Deals 7.5%.</p>
+      <ul>
+        {Object.keys(GROUP_LABEL).map((key) => (
+          <li key={key}><strong>{GROUP_LABEL[key]}</strong>: {GROUP_HELP[key]}</li>
+        ))}
+        <li><strong>vs Nifty ({months} months)</strong>: the stock's change over the last {months} months minus Nifty's. Positive means it is beating the market.</li>
+        <li><strong>Tested pick</strong>: on Monday's top 10, the list the backtest buys from. <strong>Your choice</strong>: added to the watchlist later in the week or carried over; buying these is your own judgement.</li>
+        <li><strong>Weeks on the list</strong>: how many weeks in a row it has stayed on the watchlist. <strong>Since joined</strong> (Watchlist tab) shows whether that has paid off against Nifty.</li>
+      </ul>
+      <p>No single score has predicted well in every period of the backtest; that is why the model adds all six.
+        Use them to see why a stock ranks high, not as separate buy signals.</p>
+    </details>
+  );
+}
+
+// Tested pick (Monday's top 10, the list the backtest buys from) or your own choice,
+// and how many weeks in a row the stock has been on the watchlist.
+function ListBadges({ item }: { item: ListFacts }) {
+  if (item.tested === undefined) return null;
+  return (
+    <>
+      <Tag tone={item.tested ? "up" : "plain"}>{item.tested ? "Tested pick" : "Your choice"}</Tag>
+      {item.weeks_on ? <span className="small muted">{item.weeks_on > 1 ? `${item.weeks_on} weeks on the list` : "new this week"}</span> : null}
+    </>
+  );
+}
+
+// Why a stock ranks where it does: the six group scores (0-100), and its move against Nifty.
+function ScoreSplit({ item, symbol, leadDays }: { item: ListFacts; symbol: string; leadDays?: number }) {
+  if (!item.split) return null;
+  const split = item.split;
+  const keys = Object.keys(GROUP_LABEL).filter((key) => split[key] != null);
+  const lead = item["lead_%"];
+  const months = leadDays ? Math.round(leadDays / 21) : 3;
+  return (
+    <span className="small muted" data-testid={`split-${symbol}`}>
+      {keys.map((key, index) => (
+        <span key={key} title={GROUP_HELP[key]}>{index ? " · " : ""}{GROUP_LABEL[key]} {Math.round(split[key])}</span>
+      ))}
+      {lead != null ? <> · <span className={lead >= 0 ? "up" : "down"}>{pct(lead, 1)} vs Nifty ({months} months)</span></> : null}
+    </span>
+  );
+}
+
+function WeekTable({ rows, quote, liveTime, leadDays }: {
+  rows: WeekRow[]; quote: (s: string) => LivePrice | undefined; liveTime?: string;
+  leadDays?: number;
 }) {
-  const dayNames = days.map((list) => new Date(list).toLocaleDateString("en-IN", { weekday: "short" }));
   return (
     <div className="table-wrap">
       <table className="week-table">
@@ -237,8 +303,7 @@ function WeekTable({ rows, days, quote, liveTime }: {
             <th>Stock</th>
             <th>Today</th>
             <th className="right">Live{liveTime ? ` · ${liveTime}` : ""}</th>
-            <th className="right" title="Rank on each day's list this week">Rank {dayNames.join(" · ")}</th>
-            <th className="right">Since picked</th>
+            <th className="right" title="From the close it joined the watchlist on">Since joined</th>
           </tr>
         </thead>
         <tbody>
@@ -249,7 +314,11 @@ function WeekTable({ rows, days, quote, liveTime }: {
             const change = now?.["change_%"];
             return (
               <tr key={row.symbol}>
-                <td><Link to={`/stocks/${row.symbol}`} style={{ color: "var(--text)", fontWeight: 600 }}>{row.symbol}</Link></td>
+                <td style={{ maxWidth: 320, whiteSpace: "normal" }}>
+                  <Link to={`/stocks/${row.symbol}`} style={{ color: "var(--text)", fontWeight: 600 }}>{row.symbol}</Link>
+                  <div className="list-badges"><ListBadges item={row} /></div>
+                  <ScoreSplit item={row} symbol={row.symbol} leadDays={leadDays} />
+                </td>
                 <td title={row.why || undefined}>
                   <Tag tone={STATUS_TONE[row.status] ?? "plain"}>{row.status}</Tag>
                   {shortWhy(row) ? <span className="small muted"> {shortWhy(row)}</span> : null}
@@ -260,12 +329,6 @@ function WeekTable({ rows, days, quote, liveTime }: {
                     : <span className="muted">–</span>}
                   {backInRange ? <div className="small up" style={{ fontWeight: 600 }}>back in range</div> : null}
                   {aboveNow ? <div className="small warn-text" style={{ fontWeight: 600 }}>above limit now</div> : null}
-                </td>
-                <td className="right num">
-                  {days.map((list, index) => (
-                    <span key={list}>{index ? <span className="muted"> · </span> : null}
-                      {row.ranks[list] ?? <span className="muted">–</span>}</span>
-                  ))}
                 </td>
                 <td className="right num">
                   <span className={(row["since_first_%"] ?? 0) >= 0 ? "up" : "down"}>{pct(row["since_first_%"])}</span>
@@ -480,9 +543,9 @@ export default function TodayPage() {
   const level = !market.ok ? "weak" : caution ? "caution" : "strong";
   const sectors = data.sectors ?? [];
   const tabs = [
-    { id: "buy", label: "This week's buys", count: data.buys.length },
+    { id: "buy", label: "Buy today", count: data.buys.length },
     ...(sectors.length ? [{ id: "sectors", label: "Best by sector", count: sectors.length }] : []),
-    ...(data.week_list.length ? [{ id: "week", label: "Week tracker", count: data.week_list.length }] : []),
+    ...(data.week_list.length ? [{ id: "week", label: "Watchlist", count: data.week_list.length }] : []),
   ];
   const shown = tabs.some((item) => item.id === tab) ? tab : "buy";
 
@@ -515,7 +578,7 @@ export default function TodayPage() {
               note={plan.open_places_after ? `${plan.open_places_after} place${plan.open_places_after > 1 ? "s" : ""} still free` : "all places full"} /> : null}
           </div>
           <p className="small muted" data-testid="next-list">
-            This week's list was made from the {day(data.list_from)} close. Next list: {day(data.next_list)}, from the Friday close.
+            This week's watchlist started from the {day(data.list_from)} close and adds each day's new picks; buy on any day it shows Buy. Next week starts {day(data.next_list)}.
           </p>
         </div>
         <div className="hp-side">
@@ -561,9 +624,10 @@ export default function TodayPage() {
           <section className="panel list-panel" id="buy" aria-label="This week's list">
             <div className="list-head">
               <Tabs tabs={tabs} active={shown} onChange={changeTab} label="This week's list" />
-              <span className="small muted">Limits from the {day(data.list_from)} close · place AMO limit orders</span>
+              <span className="small muted">Limits from the {day(data.signal_day)} close · place AMO limit orders</span>
             </div>
             {data.explain ? <p className="small muted" data-testid="list-explain">{data.explain}</p> : null}
+            {shown !== "sectors" ? <ScoreLegend leadDays={data.lead_days} /> : null}
             <p className="small muted live-line" data-testid="live-status">
               {liveFailed && !live ? "Live prices could not be fetched; showing the last close."
                 : !live ? "Getting live prices…"
@@ -575,9 +639,7 @@ export default function TodayPage() {
               {shown === "buy" ? (
                 <div className="cards">
                   {!market.ok ? <Empty>The market is weak, so the model buys nothing today.</Empty>
-                    : data.buys.length === 0 ? (data.buy_window && !data.buy_window.open
-                      ? <Empty>No buys until {day(data.buy_window.next)}. The tested model buys only at the first open of the week; buying the week's picks on later days made results worse.</Empty>
-                      : <Empty>Nothing on this week's list is buyable today.</Empty>)
+                    : data.buys.length === 0 ? <Empty>Nothing on this week's watchlist is buyable today.</Empty>
                       : data.buys.map((item) => {
                         const now = quote(item.symbol);
                         const above = now !== undefined && now.price > item.ladder.limit;
@@ -588,9 +650,11 @@ export default function TodayPage() {
                               <div className="line1">
                                 <span className="symbol">{item.symbol}</span>
                                 <Tag tone={item.tag === "Buy" ? "blue" : "plain"}>{item.tag}</Tag>
+                                <ListBadges item={item} />
                                 {now ? <Tag tone={above ? "warn" : "up"}>{above ? "Above limit now" : "In range now"}</Tag> : null}
                               </div>
                               <span className="small muted">{item.about}</span>
+                              <ScoreSplit item={item} symbol={item.symbol} leadDays={data.lead_days} />
                               {above ? <span className="small down">Live price is above the limit ₹{price(item.ladder.limit)}: do not chase. A limit order fills only if it comes back.</span> : null}
                             </div>
                             <div className="mid">
@@ -623,8 +687,9 @@ export default function TodayPage() {
 
               {shown === "week" ? (
                 <div id="week">
-                  <p className="small muted">{data.week_list.length} stocks · {countBy(data.week_list)} · rank each day and move since picked</p>
-                  <WeekTable rows={data.week_list} days={data.week_days} quote={quote} liveTime={live ? clock(live.time) : undefined} />
+                  <p className="small muted">{data.week_list.length} stocks · {countBy(data.week_list)}</p>
+                  <WeekTable rows={data.week_list} quote={quote} liveTime={live ? clock(live.time) : undefined}
+                    leadDays={data.lead_days} />
                   {data.watch.length ? (
                     <p className="small muted">
                       New on today's list, not this week's (watch only: buying new picks every day did worse in the tests):{" "}
@@ -651,7 +716,7 @@ export default function TodayPage() {
         </aside>
       </div>
       <p className="small muted">
-        Buy, hold and sell follow the tested model. Market mood and everything on the Market page are for context.
+        Tested picks, hold and sell follow the tested model; other watchlist stocks are your choice. Market mood and everything on the Market page are for context.
       </p>
     </>
   );

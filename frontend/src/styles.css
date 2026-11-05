@@ -428,3 +428,10 @@ details.week[open] > summary::before { content: "▾"; }
 .hold-row.dense .d-facts .gap-chip { margin-left: 6px; }
 .hold-row.dense .h-note { padding-top: 4px; }
 .size-chip { padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--down-bg); color: var(--down); white-space: nowrap; }
+
+/* The 'What the scores mean' legend on the Today page */
+.score-legend { margin: 0 0 10px; }
+.score-legend summary { cursor: pointer; color: var(--blue); width: fit-content; }
+.score-legend ul { margin: 6px 0; padding-left: 18px; }
+.score-legend li { margin: 3px 0; }
+.score-legend p { margin: 6px 0; }

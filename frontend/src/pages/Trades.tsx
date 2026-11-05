@@ -12,7 +12,7 @@ const todayText = () => new Date().toISOString().slice(0, 10);
 export default function TradesPage() {
   const { version } = useApp();
   const { data, error, reload, setData } = useApi<Trades>("/api/trades", version);
-  const [buy, setBuy] = useState({ symbol: "", date: todayText(), price: "", quantity: "", note: "" });
+  const [buy, setBuy] = useState({ symbol: "", date: todayText(), price: "", quantity: "", note: "", source: "" });
   const [sell, setSell] = useState({ row: "", date: todayText(), price: "" });
   const [message, setMessage] = useState<{ tone: string; text: string } | null>(null);
   // A delete or undo asks once more on the same button before it happens.
@@ -23,6 +23,8 @@ export default function TradesPage() {
   if (error) return <Problem error={error} retry={reload} />;
   if (!data) return <Loading count={3} height={120} />;
   const totals = data.totals;
+  const sources = data.sources ?? { tested: "Tested pick", watchlist: "Watchlist (your choice)", own: "Own pick" };
+  const sourceName = (key?: string) => (key ? (sources[key] ?? key) : "–");
   // With live prices, value and gain are for now; without them, at the last close.
   const nowPrice = (symbol: string, last: number) => live?.prices[symbol]?.price ?? last;
   const liveValue = data.open.reduce((sum, row) => sum + nowPrice(row.symbol, row.last_price) * row.quantity, 0);
@@ -34,7 +36,7 @@ export default function TradesPage() {
     event.preventDefault();
     postJson<Trades>("/api/trades/buy", { ...buy, price: Number(buy.price), quantity: Number(buy.quantity) })
       .then((found) => { setData(found); setMessage({ tone: "up", text: `Saved: bought ${buy.quantity} ${buy.symbol.toUpperCase()}.` });
-        setBuy({ ...buy, symbol: "", price: "", quantity: "", note: "" }); })
+        setBuy({ ...buy, symbol: "", price: "", quantity: "", note: "", source: "" }); })
       .catch((problem: Error) => setMessage({ tone: "down", text: problem.message }));
   };
   const submitSell = (event: FormEvent) => {
@@ -97,6 +99,12 @@ export default function TradesPage() {
             onChange={(event) => setBuy({ ...buy, price: event.target.value })} /></label>
           <label>Quantity<input type="number" step="1" min="1" inputMode="numeric" required value={buy.quantity}
             onChange={(event) => setBuy({ ...buy, quantity: event.target.value })} /></label>
+          <label title="Where the idea came from, so your own picks can be compared with the model's">From
+            <select value={buy.source} onChange={(event) => setBuy({ ...buy, source: event.target.value })} aria-label="From">
+              <option value="">Work it out</option>
+              {Object.entries(sources).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+            </select>
+          </label>
           <label className="grow">Note<input value={buy.note} placeholder="optional"
             onChange={(event) => setBuy({ ...buy, note: event.target.value })} /></label>
           <button className="primary" type="submit">Save buy</button>
@@ -133,7 +141,7 @@ export default function TradesPage() {
               <div className="table-wrap">
                 <table>
                   <thead><tr><th>Stock</th><th>Bought</th><th className="right">Price</th><th className="right">Qty</th>
-                    <th className="right">{isLive ? "Live" : "Last close"}</th><th className="right">Gain</th><th></th></tr></thead>
+                    <th className="right">{isLive ? "Live" : "Last close"}</th><th className="right">Gain</th><th>From</th><th></th></tr></thead>
                   <tbody>
                     {data.open.map((row) => (
                       <tr key={row.row}>
@@ -147,6 +155,7 @@ export default function TradesPage() {
                           const gainPct = (nowPrice(row.symbol, row.last_price) / row.buy_price - 1) * 100;
                           return <td className={`right num ${gain >= 0 ? "up" : "down"}`}>{signedRupees(gain)} ({pct(gainPct)})</td>;
                         })()}
+                        <td className="small muted">{sourceName(row.source)}</td>
                         {fixButton("delete", row.row, "Delete", `Deleted the ${row.symbol} buy.`)}
                       </tr>
                     ))}
@@ -156,11 +165,20 @@ export default function TradesPage() {
             )}
           </Panel>
           <Panel title="Closed trades">
+            {data.by_source?.length ? (
+              <p className="small muted" data-testid="by-source">
+                By where the idea came from:{" "}
+                {data.by_source.map((item, index) => (
+                  <span key={item.source || "none"}>{index ? " · " : ""}{item.label} {item.trades} trade{item.trades === 1 ? "" : "s"}, {item.won} won,{" "}
+                    <span className={item.net_profit >= 0 ? "up" : "down"}>{signedRupees(item.net_profit)}</span></span>
+                ))}
+              </p>
+            ) : null}
             {data.closed.length === 0 ? <Empty>No closed trades yet.</Empty> : (
               <div className="table-wrap">
                 <table>
                   <thead><tr><th>Stock</th><th>Bought</th><th>Sold</th><th className="right">Profit</th>
-                    <th className="right">Charges</th><th className="right">After charges</th><th></th></tr></thead>
+                    <th className="right">Charges</th><th className="right">After charges</th><th>From</th><th></th></tr></thead>
                   <tbody>
                     {data.closed.map((row) => (
                       <tr key={row.row}>
@@ -170,6 +188,7 @@ export default function TradesPage() {
                         <td className={`right num ${row.profit >= 0 ? "up" : "down"}`}>{signedRupees(row.profit)} ({pct(row["profit_%"])})</td>
                         <td className="right num muted">{rupees(row.charges, 2)}</td>
                         <td className={`right num ${row.net_profit >= 0 ? "up" : "down"}`}>{signedRupees(row.net_profit)}</td>
+                        <td className="small muted">{sourceName(row.source)}</td>
                         {fixButton("undo-sell", row.row, "Undo sell", `Undid the ${row.symbol} sale; it is open again.`)}
                       </tr>
                     ))}

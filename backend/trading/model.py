@@ -587,7 +587,8 @@ class Model:
             budget_scale=rules.get("budget_scale"), exit_before=rules.get("exit_before"),
             industry=self.industry, max_per_industry=rules.get("max_per_industry"),
             profit_trail=rules.get("profit_trail"), exit_confirm=rules.get("exit_confirm"),
-            exit_buffer=rules.get("exit_buffer"))
+            exit_buffer=rules.get("exit_buffer"),
+            pick_list=rules.get("pick_list"))
 
     def decision(self, held_symbols, style=None, buy_prices=None, buy_dates=None):
         """What the model says to do now, given the stocks you really hold.

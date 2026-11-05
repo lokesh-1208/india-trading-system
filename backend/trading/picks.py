@@ -1,10 +1,14 @@
-"""Each day's top-10 list, kept on disk as it was made, and the week tracker.
+"""Each day's top-10 list, kept on disk as it was made, and the week's watchlist.
 
-The model's tested rule picks once a week (the list for the first trading day of
-the week). The other days' lists are for watching: which picks stay strong day
-after day, which drop off, and what is new. Every list is saved, so a list is
-never rewritten later when data changes, and the record becomes a live track
-record.
+A fresh top 10 is made every day. The week's watchlist (watchlist()) grows with
+them: Monday's list starts it, each later day adds the names that are new, and on
+the next week's first list the whole watchlist is re-ranked and its best 10 carry
+over. Any stock on it may be bought on any day it passes the checks (5 Nov 2026,
+Lokesh's choice). The tested rule still buys only from the Monday top 10: buying
+every day did worse in all three test periods (backtest log, entry 12), so those
+ten are marked "tested picks" and the rest "your choice". Every list is saved, so
+a list is never rewritten later when data changes, and the record becomes a live
+track record.
 
 A list is named by the day it is for (list_day): the list made from Friday's
 close is Monday's list.
@@ -21,6 +25,8 @@ them is your own choice: the backtest only tested buying from the top 10.
 import pandas as pd
 
 import config
+
+CARRY_OVER = 10          # best stocks of last week's watchlist that start the next week
 from trading import holidays, today
 
 COLUMNS = ["list_day", "signal_day", "rank", "symbol", "score", "close", "weekly", "group",
@@ -290,3 +296,67 @@ def weekly_status(weekly, last_close, in_trend, results_due, held, places, max_g
                      "industry": industry if isinstance(industry, str) else ""})
     return pd.DataFrame(rows, columns=["symbol", "rank", "score", "close", "limit", "last",
                                        "kind", "status", "group", "industry"])
+
+
+def watchlist(log, list_day, rank_on):
+    """The week's watchlist for list_day: last week's best plus every daily top 10 so far.
+
+    rank_on(day): symbols ranked best first on that close (the model's score), used on
+    the close the week's first list was made from to choose the CARRY_OVER stocks of
+    last week's watchlist that start this week.
+    Returns one row per stock, in the order it joined: symbol, added (the list day it
+    joined this week, or None when carried over), carried, weeks_on (weeks in a row on
+    the watchlist, this one included), first_day / first_signal / first_close (where the
+    current run on the watchlist began), tested (on this week's first top 10, the list
+    the backtest buys from), days_on (this week's daily lists it was on) and ranks
+    {list day: rank}.
+    """
+    columns = ["symbol", "added", "carried", "weeks_on", "first_day", "first_signal",
+               "first_close", "tested", "days_on", "ranks"]
+    top = top_part(log[log["list_day"] <= pd.Timestamp(list_day)]).copy() if len(log) \
+        else log
+    if len(top) == 0:
+        return pd.DataFrame(columns=columns)
+    top["week"] = top["list_day"].map(_week)
+    previous, first, streak = [], {}, {}
+    rows = None
+    for week in sorted(top["week"].unique()):
+        rows = top[top["week"] == week].sort_values(["list_day", "rank"])
+        carry = []
+        if previous:
+            order = {symbol: place for place, symbol in enumerate(rank_on(rows["signal_day"].iloc[0]))}
+            carry = sorted([s for s in previous if s in order], key=order.get)[:CARRY_OVER]
+        pool = list(carry)
+        for symbol in rows["symbol"]:
+            if symbol not in pool:
+                pool.append(symbol)
+        began = {}
+        for symbol in pool:
+            if symbol in previous and symbol in first:
+                began[symbol] = first[symbol]
+            else:
+                mine = rows[rows["symbol"] == symbol].iloc[0]
+                began[symbol] = (mine["list_day"], mine["signal_day"], float(mine["close"]))
+        streak = {s: (streak.get(s, 0) + 1 if s in previous else 1) for s in pool}
+        first, previous, carried = began, pool, set(carry)
+    week_rows = rows
+    tested_rows = week_rows[week_rows["weekly"].astype(bool)]
+    if len(tested_rows) == 0:              # no Monday list saved: the week's first list
+        tested_rows = week_rows[week_rows["list_day"] == week_rows["list_day"].min()]
+    tested = set(tested_rows["symbol"])
+    out = []
+    for symbol in previous:
+        mine = week_rows[week_rows["symbol"] == symbol]
+        out.append({
+            "symbol": symbol,
+            "added": None if symbol in carried and symbol not in set(mine["symbol"])
+            else (mine["list_day"].min() if len(mine) else None),
+            "carried": symbol in carried,
+            "weeks_on": int(streak[symbol]),
+            "first_day": first[symbol][0], "first_signal": first[symbol][1],
+            "first_close": first[symbol][2],
+            "tested": symbol in tested,
+            "days_on": int(len(mine)),
+            "ranks": {day: int(rank) for day, rank in zip(mine["list_day"], mine["rank"])},
+        })
+    return pd.DataFrame(out, columns=columns)

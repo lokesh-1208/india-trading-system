@@ -13,7 +13,7 @@ test.describe("Today page", () => {
       await expect(page.getByRole("link", { name: `${item.symbol}: ${item.tag}` })).toBeVisible();
     }
     await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toBeVisible();
-    await page.getByRole("tab", { name: /Week tracker/ }).click();
+    await page.getByRole("tab", { name: /Watchlist/ }).click();
     await expect(page.locator("#week table")).toContainText("Missed");
     await expect(page.getByTestId("next-list")).toContainText("Fri, 9 Oct");
     await expect(page.getByTestId("market-checks")).toContainText("1 more not known yet");
@@ -29,7 +29,7 @@ test.describe("Today page", () => {
     await expect(chennpetro).toContainText("do not chase");
     await expect(page.getByRole("link", { name: "KOTAKBANK: Buy" })).toContainText("In range now");
     await expect(page.getByRole("link", { name: "TESTCO: Hold" })).toContainText("live ₹106.00");
-    await page.getByRole("tab", { name: /Week tracker/ }).click();
+    await page.getByRole("tab", { name: /Watchlist/ }).click();
     await expect(page.locator("#week table")).toContainText("back in range");
   });
 
@@ -111,17 +111,34 @@ test.describe("Before 9:15 am", () => {
   });
 });
 
-test("after Monday the page says no buys until the next list, and warns about size", async ({ page }) => {
+test("any day: buys come from the watchlist, marked tested pick or your choice, with the score split", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  const tested = page.getByRole("link", { name: "CHENNPETRO: Buy" });
+  await expect(tested).toContainText("Tested pick");
+  await expect(tested).toContainText("2 weeks on the list");
+  await expect(page.getByTestId("split-CHENNPETRO").first()).toContainText("Price 75 · Owners 57");
+  await expect(page.getByTestId("split-CHENNPETRO").first()).toContainText("+4.2% vs Nifty (3 months)");
+  const chosen = page.getByRole("link", { name: "KOTAKBANK: Buy" });
+  await expect(chosen).toContainText("Your choice");
+  await expect(chosen).toContainText("new this week");
+  await expect(page.locator("#buy")).not.toContainText("No buys until");
+  const legend = page.getByTestId("score-legend");
+  await legend.getByText("What the scores mean").click();
+  await expect(legend).toContainText("50 is average");
+  await expect(legend).toContainText("Value");
+  await page.getByRole("tab", { name: /Watchlist/ }).click();
+  await expect(page.locator("#week table")).toContainText("Tested pick");
+  await expect(page.locator("#week table")).toContainText("Since joined");
+});
+
+test("the page warns when your stocks cost more than your trading money", async ({ page }) => {
   const today = fixture("today");
-  today.buys = [];
-  today.buy_window = { open: false, day: "2026-10-12T00:00:00", next: "2026-10-19T00:00:00" };
-  today.money_plan = { ...today.money_plan, buys: [], spend: 0,
-    note: "No new buys until Mon 19 Oct: the model buys only at the first open of the week. Keep the cash until then.",
+  today.money_plan = { ...today.money_plan,
     warning: "Your stocks cost ₹161,971, more than your trading money ₹100,000." };
   today.holds[0].size_vs_plan = 3.01;
   await mockApi(page, { today });
   await page.goto("/");
-  await expect(page.locator("#buy")).toContainText("No buys until Mon, 19 Oct");
   await expect(page.getByTestId("money-warning")).toContainText("more than your trading money");
   await expect(page.getByTestId("oversized")).toContainText("3.0× today's place size");
 });
@@ -132,7 +149,7 @@ test("best by sector is a grid of sector cards; a card opens the full list in a 
   await page.goto("/");
   const today = fixture("today");
   // The buy cards come first; the sector list does not push them down.
-  await expect(page.getByRole("tab", { name: /This week's buys/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: /Buy today/ })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: /Best by sector/ }).click();
   const first = today.sectors[0];
   await page.getByRole("button", { name: new RegExp(`^${first.industry}:`) }).click();

@@ -10,7 +10,11 @@ import pandas as pd
 import config
 from trading import charges
 
-COLUMNS = ["symbol", "buy_date", "buy_price", "quantity", "sell_date", "sell_price", "note"]
+COLUMNS = ["symbol", "buy_date", "buy_price", "quantity", "sell_date", "sell_price", "note",
+           "source"]
+
+# Where a buy came from, so your own picks can be compared with the model's (5 Nov 2026).
+SOURCES = {"tested": "Tested pick", "watchlist": "Watchlist (your choice)", "own": "Own pick"}
 
 
 def load():
@@ -18,11 +22,14 @@ def load():
     if not config.REAL_TRADES_FILE.exists():
         return pd.DataFrame(columns=COLUMNS)
     table = pd.read_csv(config.REAL_TRADES_FILE,
-                        dtype={"note": str, "symbol": str, "buy_date": str, "sell_date": str})
+                        dtype={"note": str, "symbol": str, "buy_date": str, "sell_date": str,
+                               "source": str})
     for column in ["buy_price", "quantity", "sell_price"]:
         table[column] = pd.to_numeric(table[column], errors="coerce")
     table["note"] = table["note"].fillna("")
-    return table.reindex(columns=COLUMNS)
+    table = table.reindex(columns=COLUMNS)
+    table["source"] = table["source"].fillna("")       # trades saved before the tag existed
+    return table
 
 
 def save(table):
@@ -30,13 +37,18 @@ def save(table):
     table.reindex(columns=COLUMNS).to_csv(config.REAL_TRADES_FILE, index=False)
 
 
-def record_buy(table, symbol, buy_date, buy_price, quantity, note=""):
-    """Return the table with one more open position."""
+def record_buy(table, symbol, buy_date, buy_price, quantity, note="", source=""):
+    """Return the table with one more open position.
+
+    source: "tested", "watchlist", "own" (see SOURCES) or "" when not known.
+    """
     if buy_price <= 0 or quantity <= 0:
         raise ValueError("Price and quantity must be above zero.")
+    if source and source not in SOURCES:
+        raise ValueError(f"Unknown source {source!r}.")
     row = {"symbol": symbol.strip().upper(), "buy_date": str(buy_date),
            "buy_price": float(buy_price), "quantity": int(quantity),
-           "sell_date": None, "sell_price": None, "note": note.strip()}
+           "sell_date": None, "sell_price": None, "note": note.strip(), "source": source}
     return pd.concat([table, pd.DataFrame([row])], ignore_index=True).reindex(columns=COLUMNS)
 
 
@@ -127,3 +139,16 @@ def totals(table, last_prices=None, last_day=None):
         "closed_net": float(closed["net_profit"].sum()),
         "tax_estimate": max(0.0, float(closed["net_profit"].sum())) * config.SHORT_TERM_TAX,
     }
+
+
+def by_source(table):
+    """Closed trades grouped by where the buy came from: count, won, profit after charges."""
+    closed = closed_trades(table)
+    rows = []
+    for key, label in [*SOURCES.items(), ("", "Not tagged")]:
+        mine = closed[closed["source"].fillna("") == key]
+        if len(mine):
+            rows.append({"source": key, "label": label, "trades": int(len(mine)),
+                         "won": int((mine["net_profit"] > 0).sum()),
+                         "net_profit": round(float(mine["net_profit"].sum()), 2)})
+    return rows

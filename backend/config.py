@@ -26,6 +26,7 @@ DAILY_LIST_SIZE = 10
 # so the money can be spread across sectors by your own choice. Up to this many per
 # sector, counting the top 10; a sector with more in the top 10 keeps them all.
 SECTOR_PICKS = 3
+LEAD_DAYS = 63                 # "lead" shown on the watchlist: 3-month change minus Nifty's
 # A sector stock must score at least this (the model calls 60+ strong, 40 or less weak).
 SECTOR_MIN_SCORE = 50
 SHORT_TERM_TAX = 0.20     # tax on gains from shares held under a year (rule in force in 2026;

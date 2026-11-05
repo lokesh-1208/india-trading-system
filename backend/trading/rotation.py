@@ -142,7 +142,8 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
              trend_exit=False, buy_rank=None, max_gap=None, limit_days=None,
              max_drop=None, min_room=None, max_spike=None, midweek_fill=False,
              budget_scale=None, exit_before=None, industry=None, max_per_industry=None,
-             profit_trail=None, exit_confirm=None, exit_buffer=None):
+             profit_trail=None, exit_confirm=None, exit_buffer=None,
+             pick_list=None):
     """Follow the rule day by day. Returns equity, trades, open positions and scores.
 
     scorer: optional. A function that takes a day's position in the calendar and
@@ -195,6 +196,9 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
     row below the trend line, not after the first one.
     exit_buffer: for example 0.01. With trend_exit, sell only on a close more than this
     far below the trend line (needs prepared["room"]).
+    pick_list: optional function (signal day position, ranked symbols, score table) that
+    returns the stocks to try buying, in order, instead of the top buy_rank ranks. Used
+    by research scripts to test other ways of building the buy list.
     """
     positions_wanted = config.ROTATION_POSITIONS if positions_wanted is None else positions_wanted
     keep_rank = config.ROTATION_KEEP_RANK if keep_rank is None else keep_rank
@@ -381,7 +385,9 @@ def simulate(prepared, holdings, start=None, end=None, capital=None, scorer=None
                 week["list"] = [s for s in ranked[:buy_rank] if s not in blocked]
                 week["signal"] = {s: last_close[yesterday, column[s]] for s in week["list"]}
                 week["sold"] = set()
-                for symbol in ranked[:buy_rank]:
+                order = (pick_list(yesterday, ranked, scores) if pick_list is not None
+                         else ranked[:buy_rank])
+                for symbol in order:
                     if symbol in blocked:
                         continue
                     if trend_exit and not in_trend[yesterday, column[symbol]]:

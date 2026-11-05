@@ -129,6 +129,42 @@ def _plan():
     return built, trades, held, plan
 
 
+def week_watchlist(built=None, log=None):
+    """This week's watchlist (picks.watchlist): every daily top 10 so far plus last week's best."""
+    built = STORE.model() if built is None else built
+    log = STORE.picks_log() if log is None else log
+    if len(log) == 0:
+        return picks.watchlist(log, None, lambda day: [])
+
+    def rank_on(day):
+        day = pd.Timestamp(day).normalize()
+        if day not in built.calendar:
+            return []
+        return list(built.score_on(int(built.calendar.get_loc(day))).index)
+
+    return picks.watchlist(log, log["list_day"].max(), rank_on)
+
+
+def lead_vs_nifty(built, days=None):
+    """Each stock's change over the last `days` trading days minus Nifty's (in %)."""
+    days = config.LEAD_DAYS if days is None else days
+    close = built.prepared["last_close"]
+    if len(close) <= days:
+        return pd.Series(dtype=float)
+    nifty = STORE.closed_nifty()["Close"].reindex(close.index).ffill()
+    stock = close.iloc[-1] / close.iloc[-1 - days] - 1
+    index = nifty.iloc[-1] / nifty.iloc[-1 - days] - 1
+    return ((stock - index) * 100).round(1)
+
+
+def score_split(ranking, symbol):
+    """The six group scores behind a stock's total, 0-100 each."""
+    if symbol not in ranking.index:
+        return None
+    row = ranking.loc[symbol]
+    return {group: round(float(row[group]), 0) for group in model.GROUPS if group in row}
+
+
 def _ladder(stop, signal, limit, last):
     low, high = stop * 0.98, limit * 1.02
     return {"stop": stop, "signal": signal, "limit": limit, "last": last,
@@ -144,7 +180,7 @@ def next_list_day(list_day):
     return holidays.first_trading_day_of_week(day)
 
 
-def list_summary(status_table, places, market_ok):
+def list_summary(status_table, places, market_ok, noun="list"):
     """One plain sentence: why the Buy section shows as many stocks as it does."""
     if len(status_table) == 0:
         return "There is no list for this week yet."
@@ -159,7 +195,7 @@ def list_summary(status_table, places, market_ok):
                           ("Monday only", "{} were buyable only at Monday's open")]:
         if counts.get(status, 0):
             parts.append(words.format(int(counts[status])))
-    text = f"This week's list has {len(status_table)} stocks"
+    text = f"This week's {noun} has {len(status_table)} stocks"
     text += (": " + "; ".join(parts) + ". ") if parts else ". "
     if not market_ok:
         return text + "The market is weak, so nothing is bought today."
@@ -193,25 +229,43 @@ def today_page(money=None):
     cash = max(0.0, money + account_totals["closed_net"] - account_totals["invested"])
     per_stock = (cash + account_totals["value"]) / rules["positions"] * share
 
-    # ---- the weekly list and its status today ----
+    # ---- the week's watchlist and its status today ----
+    # Every daily top 10 of the week plus last week's best 10, buyable on any day (5 Nov
+    # 2026). The Monday top 10 stay marked "tested picks": the backtest buys only from
+    # them, and buying every day did worse in all three test periods (backtest log, 12).
     log = STORE.picks_log()
     list_day = log["list_day"].max()
     weekly = picks.weekly_list(log, list_day)
+    watch = week_watchlist(built, log)
     places = max(0, rules["positions"] - len(held))
-    status_table = picks.weekly_status(weekly, prices, built.trading["in_trend"].iloc[-1], due,
+    ranking = plan["today"]
+    rank_now = {symbol: place for place, symbol in enumerate(ranking.index, start=1)}
+    info = watch.set_index("symbol") if len(watch) else pd.DataFrame()
+    rows = []
+    sector_rows = weekly[weekly["group"] == "sector"] if len(weekly) else weekly
+    for symbol, group in ([(s, "top") for s in watch["symbol"]]
+                          + [(s, "sector") for s in sector_rows["symbol"]
+                             if s not in set(watch["symbol"])]):
+        last = prices.get(symbol)
+        if last is None or last != last:
+            continue
+        rows.append({"symbol": symbol, "rank": rank_now.get(symbol, len(rank_now) + 1),
+                     "score": float(ranking["score"].get(symbol, float("nan"))),
+                     # Daily rule: the buy limit comes from the latest close, every day.
+                     "close": float(last), "group": group,
+                     "industry": built.industry.get(symbol, "") or "Other"})
+    table = pd.DataFrame(rows, columns=["symbol", "rank", "score", "close", "group", "industry"])
+    table["order"] = table["group"].map({"top": 0, "sector": 1})
+    table = table.sort_values(["order", "rank"], kind="stable").drop(columns="order")
+    status_table = picks.weekly_status(table, prices, built.trading["in_trend"].iloc[-1], due,
                                        set(held), places, above, budget=per_stock)
-    # The tested model buys only at the open of the week's first trading day. Buying the
-    # week's picks on later days was tested and made the worst fall deeper (backtest log,
-    # entry 9), so from then until the next list nothing is bought.
+    tested = set(info.index[info["tested"].astype(bool)]) if len(info) else set()
     first_day = pd.Timestamp(weekly["list_day"].iloc[0]).normalize() if len(weekly) else None
-    window_open = first_day is not None and today.buy_day(now).normalize() == first_day
-    if not window_open:
-        status_table.loc[status_table["status"] == "Buy", "status"] = "Monday only"
+    window_open = True                      # any day: you choose (see above)
     top_status = status_table[status_table["group"] == "top"]
     buy_now = top_status[top_status["status"] == "Buy"].head(places)
     buy_symbols = set(buy_now["symbol"])
-    ranking = plan["today"]
-    # The money plan follows the tested rule, so it fills places from the top 10 only.
+    lead = lead_vs_nifty(built)
     buyable = top_status[top_status["status"] == "Buy"]
     # Risk sizing: a jumpy stock gets less than a full place (config "risk_per_trade").
     scales = built.amount_scales(list(status_table["symbol"]))
@@ -222,9 +276,18 @@ def today_page(money=None):
         scales=scales)
     planned = {item["symbol"]: item["shares"] for item in money_plan["buys"]}
     next_monday = next_list_day(list_day)
-    if not window_open and plan["market_ok"]:
-        money_plan["note"] = (f"No new buys until {next_monday:%a %d %b}: the model buys only at "
-                              "the first open of the week. Keep the cash until then.")
+
+    def facts(symbol):
+        """Watchlist facts shown with every stock: why it ranks, how it is doing."""
+        seen = info.loc[symbol] if symbol in info.index else None
+        lead_now = lead.get(symbol, float("nan"))
+        return {"tested": symbol in tested,
+                "weeks_on": int(seen["weeks_on"]) if seen is not None else None,
+                "carried": bool(seen["carried"]) if seen is not None else False,
+                "added": seen["added"] if seen is not None else None,
+                "split": score_split(ranking, symbol),
+                "lead_%": None if lead_now != lead_now else float(lead_now)}
+
     if money_plan["invested"] > money_plan["capital"]:
         money_plan["warning"] = (
             f"Your stocks cost ₹{money_plan['invested']:,.0f}, more than your trading money "
@@ -258,7 +321,7 @@ def today_page(money=None):
                 "shares": planned.get(row.symbol, int(per_stock * scales.get(row.symbol, 1.0)
                                                       // row.limit) if row.limit > 0 else 0),
                 "size_share": round(scales.get(row.symbol, 1.0), 2),
-                "kind": row.kind, "status": row.status}
+                "kind": row.kind, "status": row.status, **facts(row.symbol)}
         item["amount"] = item["shares"] * row.limit
         # Every stock of the weekly list, by sector: the top 10 ones and the sector picks.
         sector = row.industry or built.industry.get(row.symbol, "") or "Other"
@@ -274,15 +337,16 @@ def today_page(money=None):
             item["tag"] = "Backup"
             buys.append(item)
 
-    explain = list_summary(top_status, places, bool(plan["market_ok"]))
+    explain = list_summary(top_status, places, bool(plan["market_ok"]), noun="watchlist")
+    if len(top_status):
+        explain += f" {len([s for s in top_status['symbol'] if s in tested])} are tested picks."
     sectors = sorted(({"industry": name, "stocks": stocks,
                        "in_top": sum(1 for stock in stocks if stock["group"] == "top")}
                       for name, stocks in by_sector.items()),
                      key=lambda sector: min(stock["rank"] for stock in sector["stocks"]))
     extra = int((status_table["group"] == "sector").sum())
     if extra:
-        explain += (f" Best by sector adds {extra} more stocks across {len(sectors)} sectors: "
-                    "buying those is your choice (they were not part of the backtest).")
+        explain += f" Best by sector: {extra} more across {len(sectors)} sectors."
 
     # ---- your stocks ----
     trend = STORE.trend_line()
@@ -314,35 +378,33 @@ def today_page(money=None):
     if holding:
         parts.append(f"hold {holding}")
     headline = ", ".join(parts).capitalize() if parts else "Nothing to do today"
-    if not window_open and plan["market_ok"] and not to_buy:
-        headline = ", ".join(parts).capitalize() + " · next buys Monday" if parts \
-            else f"No buys until {next_monday:%a %d %b}"
     if not plan["market_ok"]:
         headline = "Market weak: no new buys" + (f", sell {len(sells)}" if sells else "")
 
-    # ---- watch: today's list but not this week's ----
-    todays = log[log["list_day"] == list_day]
-    watch = todays[~todays["symbol"].isin(set(weekly["symbol"]) | set(held))]
-    watch = picks.top_part(watch)
-    weekly_day = len(weekly) and weekly["list_day"].iloc[0] == list_day
-
     known = plan["checks"].dropna()
-    week_rows, week_days = picks.tracker(log, list_day, built.prepared["last_close"],
-                                         STORE.closed_nifty()["Close"])
-    # One table for the whole weekly list: today's status, ranks each day, move since picked.
+    # One table for the whole watchlist: today's status, ranks each day, move since it joined.
+    week_of = picks._week(list_day)
+    week_days = sorted(day for day in log["list_day"].unique() if picks._week(day) == week_of)
+    nifty_close = STORE.closed_nifty()["Close"]
     tags = {item["symbol"]: item["tag"] for item in buys}
-    tracked = {row["symbol"]: row for row in week_rows.to_dict("records")} if len(week_rows) else {}
     week_list = []
     for row in top_status.itertuples():
-        seen = tracked.get(row.symbol, {})
+        seen = info.loc[row.symbol] if row.symbol in info.index else None
+        since = nifty_since = None
+        if seen is not None and seen["first_close"]:
+            since = round((row.last / float(seen["first_close"]) - 1) * 100, 1)
+            base = nifty_close[nifty_close.index <= pd.Timestamp(seen["first_signal"])]
+            if len(base):
+                nifty_since = round((nifty_close.iloc[-1] / base.iloc[-1] - 1) * 100, 1)
         week_list.append({
             "symbol": row.symbol, "rank": row.rank, "score": row.score,
             "status": tags.get(row.symbol, row.status) if plan["market_ok"] or
             row.status != "Buy" else "Market weak",
             "why": why(row), "close": row.close, "limit": row.limit, "last": row.last,
             "ranks": {str(pd.Timestamp(day).date()): rank
-                      for day, rank in seen.get("ranks", {}).items()},
-            "since_first_%": seen.get("since_first_%"), "nifty_%": seen.get("nifty_%")})
+                      for day, rank in (seen["ranks"] if seen is not None else {}).items()},
+            "first_day": seen["first_day"] if seen is not None else None,
+            "since_first_%": since, "nifty_%": nifty_since, **facts(row.symbol)})
 
     return clean({
         "week_list": week_list,
@@ -353,9 +415,11 @@ def today_page(money=None):
         "list_day": list_day, "signal_day": last_day,
         # The close the weekly list (and its buy limits) was made from: the Friday before.
         "list_from": weekly["signal_day"].iloc[0] if len(weekly) else None,
+        "lead_days": config.LEAD_DAYS,
         "next_list": next_list_day(list_day),
         "headline": headline, "nothing_to_sell": not sells, "explain": explain,
-        "buy_window": {"open": bool(window_open), "day": first_day, "next": next_monday},
+        "buy_window": {"open": bool(window_open), "day": first_day, "next": next_monday,
+                       "any_day": True},
         "money_plan": money_plan,
         "market": {"level": plan["market_level"], "note": plan["market_note"],
                    "ok": bool(plan["market_ok"]), "share": share, "per_stock": per_stock,
@@ -366,7 +430,7 @@ def today_page(money=None):
                    "stop_loss": rules["stop_loss"], "max_gap": above},
         "buys": buys if plan["market_ok"] else [],
         "holds": holds,
-        "watch": [] if weekly_day else records(watch, ["symbol", "rank", "score", "close"]),
+        "watch": [],             # every daily pick is on the watchlist now
         "results_due": [{"symbol": symbol, "date": date} for symbol, date in sorted(due.items())
                         if symbol in set(ranking.index[:20])],
     })
@@ -422,7 +486,8 @@ def before_open():
     likely = likely[likely["symbol"].isin(set(symbols))]
     _, _, held, _ = _plan()
     log = STORE.picks_log()
-    weekly = set(picks.weekly_list(log, log["list_day"].max())["symbol"])
+    weekly = set(picks.weekly_list(log, log["list_day"].max())["symbol"]) \
+        | set(week_watchlist(built, log)["symbol"])
     ranking, in_trend = STORE.ranking(), STORE.in_trend()
 
     def view(symbol):
@@ -460,7 +525,8 @@ def news_page():
     ranking, in_trend = STORE.ranking(), STORE.in_trend()
     _, _, held, _ = _plan()
     log = STORE.picks_log()
-    weekly = set(picks.weekly_list(log, log["list_day"].max())["symbol"])
+    weekly = set(picks.weekly_list(log, log["list_day"].max())["symbol"]) \
+        | set(week_watchlist(log=log)["symbol"])
     buys, exits = newsview.ideas(reading, ranking, in_trend, STORE.model().prepared["last_close"],
                                  STORE.trend_line().iloc[-1], held=held, weekly=weekly,
                                  reactions=reactions)
@@ -691,14 +757,24 @@ def stock_page(symbol):
     log = STORE.picks_log()
     list_day = log["list_day"].max() if len(log) else None
     weekly = picks.weekly_list(log, list_day) if list_day is not None else log
-    if symbol in set(weekly["symbol"]):
-        on = weekly.set_index("symbol").loc[symbol]
-        limit = float(on["close"]) * (1 + (rules.get("max_gap") or 0))
-        part = " (sector pick)" if str(on.get("group", "top")) == "sector" else ""
-        stands.append({"kind": "weekly",
-                       "text": f"On this week's list{part} · buy below ₹{limit:,.2f}"})
+    watch = week_watchlist(built, log) if list_day is not None else pd.DataFrame(
+        columns=["symbol", "tested", "weeks_on"])
+    if symbol in set(watch["symbol"]) or symbol in set(weekly["symbol"]):
+        # Any day: the buy limit is the latest close + the buy range.
+        last_close = float(prices["Close"].iloc[-1])
+        limit = last_close * (1 + (rules.get("max_gap") or 0))
+        if symbol in set(watch["symbol"]):
+            on = watch.set_index("symbol").loc[symbol]
+            weeks = int(on["weeks_on"])
+            part = (" · tested pick" if bool(on["tested"]) else " · your choice") + \
+                (f" · {weeks} weeks running" if weeks > 1 else "")
+            stands.append({"kind": "weekly",
+                           "text": f"On this week's watchlist{part} · buy below ₹{limit:,.2f}"})
+        else:
+            stands.append({"kind": "weekly", "text": "On this week's list (sector pick) · "
+                           f"buy below ₹{limit:,.2f}"})
         levels.update(limit=limit)
-        levels.setdefault("stop", float(on["close"]) * (1 - rules["stop_loss"]))
+        levels.setdefault("stop", last_close * (1 - rules["stop_loss"]))
     elif list_day is not None and symbol in set(log.loc[log["list_day"] == list_day, "symbol"]):
         stands.append({"kind": "today", "text": "On today's list (watch only)"})
     if symbol in set(ranking.tail(config.MODEL_WEAKEST).index):
@@ -797,13 +873,28 @@ def trades_page():
     closed = journal.closed_trades(trades)
     closed = closed.assign(row=closed.index)
     return clean({"totals": totals, "open": records(positions), "closed": records(closed),
+                  "by_source": journal.by_source(trades), "sources": journal.SOURCES,
                   "symbols": sorted(STORE.stocks())})
 
 
-def record_buy(symbol, day, price, quantity, note=""):
+def guess_source(symbol):
+    """Where a new buy most likely came from: a tested pick, the watchlist, or your own."""
+    try:
+        watch = week_watchlist()
+    except Exception:
+        return ""
+    if symbol in set(watch["symbol"]):
+        on = watch.set_index("symbol").loc[symbol]
+        return "tested" if bool(on["tested"]) else "watchlist"
+    return "own"
+
+
+def record_buy(symbol, day, price, quantity, note="", source=""):
+    """Save a buy. Without a source, it is worked out from this week's watchlist."""
     if symbol not in STORE.stocks():
         raise ValueError(f"{symbol} is not a stock the system knows.")
-    trades = journal.record_buy(journal.load(), symbol, day, price, quantity, note)
+    source = source or guess_source(symbol)
+    trades = journal.record_buy(journal.load(), symbol, day, price, quantity, note, source)
     journal.save(trades)
     return trades_page()
 

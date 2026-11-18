@@ -8,6 +8,8 @@ import TodayPage from "./pages/Today";
 import MarketHub, { MARKET_TABS } from "./pages/MarketHub";
 import StockPage from "./pages/Stock";
 import TradesPage from "./pages/Trades";
+import IntradayPage from "./pages/Intraday";
+import SettingsPage from "./pages/Settings";
 
 type AppState = {
   version: number; theme: string; status: Status | null;
@@ -150,6 +152,8 @@ export default function App() {
     ["/", "Today", pathname === "/"],
     ["/market", "Market", marketPaths.includes(pathname)],
     ["/trades", "Stocks & trades", pathname.startsWith("/trades") || pathname.startsWith("/stocks")],
+    ["/intraday", "Intraday", pathname.startsWith("/intraday")],
+    ["/settings", "Settings", pathname.startsWith("/settings")],
   ];
   const strip = liveStrip ?? status?.strip ?? [];
 
@@ -189,6 +193,8 @@ export default function App() {
           {marketPaths.map((path) => <Route key={path} path={path} element={<MarketHub />} />)}
           <Route path="/stocks/:symbol" element={<StockPage />} />
           <Route path="/trades" element={<TradesPage />} />
+          <Route path="/intraday" element={<IntradayPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<TodayPage />} />
         </Routes>
       </main>

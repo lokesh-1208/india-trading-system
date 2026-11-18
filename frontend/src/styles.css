@@ -435,3 +435,18 @@ details.week[open] > summary::before { content: "▾"; }
 .score-legend ul { margin: 6px 0; padding-left: 18px; }
 .score-legend li { margin: 3px 0; }
 .score-legend p { margin: 6px 0; }
+
+/* ---- Intraday tab ---- */
+.intraday-card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.intraday-card.buy { border-left: 4px solid var(--up); }
+.intraday-card.sell { border-left: 4px solid var(--down); }
+.ic-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+.ic-head strong { font-size: 17px; }
+.ic-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); }
+.ic-plan { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.ic-plan div { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; display: flex; flex-direction: column; }
+.ic-plan .name { font-size: 11px; color: var(--muted); }
+.ic-plan .value { font-weight: 600; }
+.ic-order { font-size: 13px; padding: 8px 10px; border-radius: 9px; background: var(--blue-bg); }
+.inline-form { display: flex; gap: 6px; align-items: center; }
+.inline-form input { width: 90px; }

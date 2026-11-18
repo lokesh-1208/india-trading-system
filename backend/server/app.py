@@ -15,12 +15,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from server import views
+from server.intraday_api import router as intraday_router
 from server.jobs import JOBS
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 PAGE = ROOT / "frontend" / "dist"
 
 app = FastAPI(title="Kasauti", docs_url="/api/docs", openapi_url="/api/openapi.json")
+app.include_router(intraday_router)  # the Intraday tab (experimental)
 
 
 @app.on_event("startup")

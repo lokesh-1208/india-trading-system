@@ -21,8 +21,13 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   return data as T;
 }
 
+export type UseApi<T> = {
+  data: T | null; error: string | null; loading: boolean; reload: () => void;
+  setData: (value: T | null) => void;
+};
+
 /** Load one address; reload when `version` changes (after an update finishes). */
-export function useApi<T>(path: string | null, version = 0) {
+export function useApi<T>(path: string | null, version = 0): UseApi<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -180,4 +185,60 @@ export type Trades = {
   symbols: string[];
   by_source?: { source: string; label: string; trades: number; won: number; net_profit: number }[];
   sources?: Record<string, string>;
+};
+
+// ---- Intraday tab (experimental) ----
+export type Guard = {
+  time: string; date: string; phase: { key: string; label: string; entries: boolean };
+  trades_used: number; trades_max: number; open_trades: number; realised_net: number;
+  loss_limit: number; loss_limit_hit: boolean; entries_allowed: boolean; blockers: string[];
+  settings: { capital: number; risk_per_trade: number; target_r: number; margin_x: number; square_off: string; last_entry: string };
+};
+export type IntradaySignal = {
+  state: "waiting" | "live" | "late" | "stopped" | "target" | "skipped";
+  reason?: string; signal_time?: string; age_candles?: number; side?: "BUY" | "SELL";
+  entry?: number; stop?: number; target?: number; qty?: number; value?: number; risk?: number; reward?: number;
+  charges_target?: number; charges_stop?: number; net_if_target?: number; net_if_stop?: number; order?: string;
+  sl_m_trigger?: number; sl_trigger?: number; sl_limit?: number; trail_at?: number; trail_to?: number; stop_pct?: number;
+};
+export type SidePlan = { with_gap: boolean; levels: IntradaySignal & { skip?: string }; signal: IntradaySignal };
+export type IntradayCandidate = {
+  symbol: string; gap_pct: number; rel_vol: number; or_high: number; or_low: number; or_range_pct: number;
+  direction: "BUY" | "SELL"; last: number; vwap: number; last_candle: string; signal: IntradaySignal;
+  tier: "tested" | "in_play" | "near"; rank: number;
+  plans: { BUY: SidePlan; SELL: SidePlan };
+};
+export type ScanResult = {
+  status: "ok" | "wait" | "no_data"; message?: string; as_of: string; session_date: string; is_today: boolean;
+  scanned: number; in_play: number; near_miss: number; no_history: number; candidates: IntradayCandidate[]; others: string[];
+  data_lag_minutes: number | null;
+};
+export type ScanState = {
+  run: { running: boolean; step: string | null; done: number; total: number; error: string | null };
+  result: ScanResult | null;
+};
+export type JournalRow = {
+  id: string; date: string; symbol: string; side: "BUY" | "SELL"; qty: string; entry: string; stop: string;
+  target: string; entry_time: string; exit: string; exit_time: string; rule: string; note: string;
+  status: "open" | "closed"; gross: string; charges: string; net: string;
+};
+export type JournalPage = {
+  open: JournalRow[]; closed: JournalRow[]; rules: Record<string, string>;
+  totals: { closed_count: number; net: number; charges: number; win_rate: number | null; days: number; best_day: number | null; worst_day: number | null };
+  by_rule: { rule: string; trades: number; net: number }[];
+};
+export type EvidenceSet = {
+  universe: string; from: string; to: string; sessions: number; stocks: number; pass_rule: string;
+  variants: { name: string; trades: number; net: number; profit_factor: number; win_rate: number; first_half: number;
+    second_half: number; passed: boolean; why: string[]; avg_per_day?: number }[];
+};
+export type ZStatus = {
+  configured: boolean; connected: boolean; user: string | null; login_url: string | null;
+  redirect_url: string; key_hint: string | null;
+};
+export type ZAccount = {
+  funds: { available: number; used: number; net: number }; pnl: number;
+  positions: { symbol: string; product: string; qty: number; average: number; last: number; pnl: number }[];
+  orders: { time: string; symbol: string; side: string; qty: number; filled: number; type: string; price: number;
+    trigger: number; average: number; status: string; product: string }[];
 };

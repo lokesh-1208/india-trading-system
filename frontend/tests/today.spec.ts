@@ -60,11 +60,11 @@ test.describe("Today page", () => {
     await expect(page.getByText("not tested")).toHaveCount(0);
   });
 
-  test("the top bar has three places and live index values", async ({ page }) => {
+  test("the top bar has its five places and live index values", async ({ page }) => {
     await mockApi(page);
     await page.goto("/");
     const nav = page.getByRole("navigation", { name: "Pages" });
-    await expect(nav.getByRole("link")).toHaveText(["Today", "Market", "Stocks & trades"]);
+    await expect(nav.getByRole("link")).toHaveText(["Today", "Market", "Stocks & trades", "Intraday", "Settings"]);
     await expect(page.locator(".strip")).toContainText("22,626.55");
     await nav.getByRole("link", { name: "Market" }).click();
     await expect(page).toHaveURL(/\/market$/);

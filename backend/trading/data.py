@@ -226,6 +226,17 @@ def keep_newer_days(table, path):
     return pd.concat([table, newer]).sort_index()
 
 
+def save_prices(table, path):
+    """Write a price CSV safely: to a temporary file first, then swap it in.
+
+    Writing straight to the final file leaves it empty if the update is stopped
+    half-way, and an empty file used to crash every page of the app.
+    """
+    temp = path.with_name(path.name + ".tmp")
+    table.to_csv(temp)
+    temp.replace(path)
+
+
 def _download_group(jobs, folder, label, report=_print_progress, unfinished=False):
     """Download a list of (name, ticker) pairs into a folder. Returns failures.
 
@@ -248,7 +259,7 @@ def _download_group(jobs, folder, label, report=_print_progress, unfinished=Fals
             else:
                 if not unfinished:
                     table = drop_unfinished_day(table)
-                keep_newer_days(table, folder / f"{name}.csv").to_csv(folder / f"{name}.csv")
+                save_prices(keep_newer_days(table, folder / f"{name}.csv"), folder / f"{name}.csv")
         report(label, min(first + BATCH_SIZE, len(jobs)), len(jobs))
         time.sleep(0.5)  # be polite to the free data source
     return failed
@@ -281,7 +292,12 @@ def load_prices(name, folder=None):
     path = folder / f"{name}.csv"
     if not path.exists():
         return None
-    table = pd.read_csv(path, index_col="Date", parse_dates=True)
+    try:
+        table = pd.read_csv(path, index_col="Date", parse_dates=True)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError):
+        # An empty or half-written file (an update stopped mid-save) must not take
+        # the whole app down: treat it like a missing file. The next update refills it.
+        return None
     return clean_prices(table)
 
 
